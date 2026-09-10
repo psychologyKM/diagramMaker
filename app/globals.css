@@ -88,6 +88,22 @@ h1 { margin: 0; font-size: 27px; line-height: 1; letter-spacing: -.045em; }
 .edge-summary { display: grid; gap: 6px; padding: 12px; border-radius: 11px; background: white; border: 1px solid var(--line); }
 .edge-summary strong { font-size: 11px; line-height: 1.4; }
 .edge-summary span { color: #8a9491; font-size: 9px; }
+.edge-option-grid { display: grid; gap: 6px; }
+.edge-option-grid.two-columns, .line-style-grid { grid-template-columns: 1fr 1fr; }
+.edge-option-grid button { min-width: 0; min-height: 34px; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 8px; background: white; color: #65706d; cursor: pointer; font-size: 9px; }
+.edge-option-grid button:hover { border-color: #abc3ba; color: var(--green); }
+.edge-option-grid button.selected { border-color: var(--green); background: #eef5f1; box-shadow: inset 0 0 0 1px var(--green); color: var(--green); font-weight: 750; }
+.direction-grid { grid-template-columns: repeat(4, 1fr); }
+.direction-grid button { min-height: 50px; flex-direction: column; gap: 2px; padding-inline: 2px; }
+.direction-preview { font-family: Arial, sans-serif; font-size: 19px; line-height: 1; }
+.direction-grid small { max-width: 100%; overflow: hidden; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.shape-preview { position: relative; width: 31px; height: 14px; flex: none; }
+.shape-preview::after { content: ''; position: absolute; inset: 6px 0 auto; border-top: 2px solid currentColor; }
+.shape-preview.curved::after { inset: 2px 1px auto; height: 10px; border: 0; border-top: 2px solid currentColor; border-radius: 50%; }
+.line-preview { width: 33px; height: 8px; flex: none; border-top: 2px solid currentColor; }
+.line-preview.dashed { border-top-style: dashed; }
+.line-preview.dotted { border-top-style: dotted; }
+.line-preview.double { border-top: 4px double currentColor; }
 
 .tip-card { margin-top: 25px; padding: 13px; border-radius: 12px; background: #eef5f1; color: #53615d; font-size: 10px; line-height: 1.65; }
 .tip-card p { margin: 7px 0 0; }
@@ -104,6 +120,8 @@ h1 { margin: 0; font-size: 27px; line-height: 1; letter-spacing: -.045em; }
 .canvas-toolbar button:hover:not(:disabled), .canvas-toolbar button.active { border-color: #a6c2b7; background: #eef5f1; color: var(--green); }
 .canvas-toolbar button:disabled { opacity: .34; cursor: default; }
 .canvas-toolbar .export-button { border-color: var(--green); color: var(--green); font-weight: 750; }
+.canvas-toolbar .pptx-button { background: var(--green); color: white; }
+.canvas-toolbar .pptx-button:hover:not(:disabled) { border-color: var(--green-deep); background: var(--green-deep); color: white; }
 .mobile-tools { display: none; }
 
 .diagram-canvas {
@@ -120,11 +138,19 @@ h1 { margin: 0; font-size: 27px; line-height: 1; letter-spacing: -.045em; }
 .diagram-canvas.connecting { cursor: crosshair; }
 .scene { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
 .edges { position: absolute; inset: 0; overflow: visible; }
-.edges marker path { fill: #697176; }
-.edge-line { fill: none; stroke: #697176; stroke-width: 2; marker-end: url(#arrow); pointer-events: none; transition: stroke .15s ease, stroke-width .15s ease; }
+.edges marker path { fill: context-stroke; }
+.edge-line { fill: none; stroke: #697176; stroke-width: 2; pointer-events: none; transition: stroke .15s ease, stroke-width .15s ease; }
+.edge-line.dashed { stroke-dasharray: 11 7; }
+.edge-line.dotted { stroke-dasharray: 1 7; stroke-linecap: round; }
+.edge-double-outer { stroke-width: 6; }
+.edge-double-inner { stroke: #fcfdfc; stroke-width: 2.2; }
 .edge-hit { fill: none; stroke: transparent; stroke-width: 18; cursor: pointer; pointer-events: stroke; }
-.edges g:hover .edge-line { stroke: var(--green); stroke-width: 2.5; }
-.edges g.selected .edge-line { stroke: var(--green); stroke-width: 3; }
+.edges g:hover .edge-line:not(.edge-double-inner) { stroke: var(--green); }
+.edges g:hover .edge-line:not(.edge-double-outer, .edge-double-inner) { stroke-width: 2.5; }
+.edges g.selected .edge-line:not(.edge-double-inner) { stroke: var(--green); }
+.edges g.selected .edge-line:not(.edge-double-outer, .edge-double-inner) { stroke-width: 3; }
+.edges g.selected .edge-double-outer { stroke-width: 7; }
+.edge-preview { fill: none; stroke: var(--green); stroke-width: 2.5; stroke-dasharray: 8 6; pointer-events: none; }
 
 .diagram-node {
   position: absolute;
@@ -157,7 +183,10 @@ h1 { margin: 0; font-size: 27px; line-height: 1; letter-spacing: -.045em; }
 .diagram-node.neutral { border-color: #bed1c8; background: var(--green-soft); color: #29483f; }
 .diagram-node.selected { box-shadow: 0 0 0 4px rgba(39, 106, 87, .18), 0 12px 28px rgba(36, 75, 63, .15); }
 .diagram-node.connect-source { box-shadow: 0 0 0 5px rgba(39, 106, 87, .24), 0 12px 28px rgba(36, 75, 63, .15); }
-.connection-dot { position: absolute; right: -7px; top: 50%; width: 14px; height: 14px; transform: translateY(-50%); border: 3px solid white; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 1px var(--green); }
+.diagram-node.connect-target { box-shadow: 0 0 0 6px rgba(39, 106, 87, .28), 0 12px 28px rgba(36, 75, 63, .17); transform: translate(-50%, -50%) scale(1.025); }
+.connection-handle { position: absolute; z-index: 2; right: -10px; top: 50%; width: 20px; height: 20px; transform: translateY(-50%) scale(.72); display: grid; place-items: center; border: 3px solid white; border-radius: 50%; background: var(--green); color: white; box-shadow: 0 0 0 1px var(--green), 0 4px 10px rgba(27,79,63,.22); cursor: crosshair; font: 700 12px/1 Arial, sans-serif; opacity: 0; transition: opacity .15s ease, transform .15s ease; }
+.diagram-node:hover .connection-handle, .diagram-node.selected .connection-handle, .diagram-canvas.connecting .connection-handle { opacity: 1; transform: translateY(-50%) scale(1); }
+.connection-handle:hover { background: var(--green-deep); }
 
 .canvas-hint { position: absolute; z-index: 3; left: 50%; bottom: 21px; transform: translateX(-50%); width: max-content; max-width: calc(100% - 190px); margin: 0; color: #97a19e; font-size: 9px; pointer-events: none; }
 .mode-banner { position: absolute; z-index: 5; top: 14px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #c2d6cd; border-radius: 999px; background: rgba(244,249,246,.96); color: #466057; box-shadow: 0 7px 22px rgba(41,76,65,.12); font-size: 10px; }

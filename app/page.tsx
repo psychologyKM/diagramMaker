@@ -4,10 +4,28 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react';
 
 type Tone = 'theme' | 'cause' | 'result' | 'neutral';
+type EdgeDirection = 'forward' | 'reverse' | 'both' | 'none';
+type EdgeShape = 'straight' | 'curved';
+type EdgeLineStyle = 'solid' | 'dashed' | 'dotted' | 'double';
 type DiagramNode = { id: string; label: string; x: number; y: number; tone: Tone };
-type DiagramEdge = { id: string; from: string; to: string };
+type DiagramEdge = {
+  id: string;
+  from: string;
+  to: string;
+  direction: EdgeDirection;
+  shape: EdgeShape;
+  lineStyle: EdgeLineStyle;
+};
 type Graph = { nodes: DiagramNode[]; edges: DiagramEdge[] };
 type Transform = { x: number; y: number; zoom: number };
+type EdgeGeometry = {
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  controlX: number;
+  controlY: number;
+};
 
 const STORAGE_KEY = 'relation-map-v1';
 const NODE_WIDTH = 176;
@@ -24,11 +42,11 @@ const initialGraph: Graph = {
     { id: 'delay', label: '判断が\n遅れる', x: 1080, y: 550, tone: 'result' },
   ],
   edges: [
-    { id: 'e1', from: 'meeting', to: 'theme' },
-    { id: 'e2', from: 'updates', to: 'theme' },
-    { id: 'e3', from: 'theme', to: 'owner' },
-    { id: 'e4', from: 'theme', to: 'delay' },
-    { id: 'e5', from: 'meeting', to: 'owner' },
+    { id: 'e1', from: 'meeting', to: 'theme', direction: 'forward', shape: 'straight', lineStyle: 'solid' },
+    { id: 'e2', from: 'updates', to: 'theme', direction: 'forward', shape: 'curved', lineStyle: 'solid' },
+    { id: 'e3', from: 'theme', to: 'owner', direction: 'forward', shape: 'straight', lineStyle: 'solid' },
+    { id: 'e4', from: 'theme', to: 'delay', direction: 'forward', shape: 'curved', lineStyle: 'dashed' },
+    { id: 'e5', from: 'meeting', to: 'owner', direction: 'both', shape: 'curved', lineStyle: 'dotted' },
   ],
 };
 
@@ -37,6 +55,25 @@ const toneNames: Record<Tone, string> = {
   cause: '原因',
   result: '結果',
   neutral: '要素',
+};
+
+const directionNames: Record<EdgeDirection, string> = {
+  forward: '順方向',
+  reverse: '逆方向',
+  both: '両方向',
+  none: '矢印なし',
+};
+
+const shapeNames: Record<EdgeShape, string> = {
+  straight: '直線',
+  curved: '曲線',
+};
+
+const lineStyleNames: Record<EdgeLineStyle, string> = {
+  solid: '実線',
+  dashed: '破線',
+  dotted: '点線',
+  double: '二重線',
 };
 
 const toneColors: Record<Tone, { fill: string; stroke: string; text: string }> = {
@@ -53,10 +90,45 @@ function cloneGraph(graph: Graph): Graph {
   };
 }
 
-function getEdgePath(edge: DiagramEdge, nodes: DiagramNode[]) {
+function isEdgeDirection(value: unknown): value is EdgeDirection {
+  return value === 'forward' || value === 'reverse' || value === 'both' || value === 'none';
+}
+
+function isEdgeShape(value: unknown): value is EdgeShape {
+  return value === 'straight' || value === 'curved';
+}
+
+function isEdgeLineStyle(value: unknown): value is EdgeLineStyle {
+  return value === 'solid' || value === 'dashed' || value === 'dotted' || value === 'double';
+}
+
+function normalizeGraph(value: Graph): Graph {
+  return {
+    nodes: value.nodes,
+    edges: value.edges.map((edge) => ({
+      ...edge,
+      direction: isEdgeDirection(edge.direction) ? edge.direction : 'forward',
+      shape: isEdgeShape(edge.shape) ? edge.shape : 'curved',
+      lineStyle: isEdgeLineStyle(edge.lineStyle) ? edge.lineStyle : 'solid',
+    })),
+  };
+}
+
+function makeEdge(from: string, to: string): DiagramEdge {
+  return {
+    id: `edge-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+    from,
+    to,
+    direction: 'forward',
+    shape: 'straight',
+    lineStyle: 'solid',
+  };
+}
+
+function getEdgeGeometry(edge: DiagramEdge, nodes: DiagramNode[]): EdgeGeometry | null {
   const source = nodes.find((node) => node.id === edge.from);
   const target = nodes.find((node) => node.id === edge.to);
-  if (!source || !target) return '';
+  if (!source || !target) return null;
 
   const dx = target.x - source.x;
   const dy = target.y - source.y;
@@ -69,10 +141,34 @@ function getEdgePath(edge: DiagramEdge, nodes: DiagramNode[]) {
   const startY = source.y + uy * sourceOffset;
   const endX = target.x - ux * targetOffset;
   const endY = target.y - uy * targetOffset;
-  const bend = ((edge.id.charCodeAt(edge.id.length - 1) % 3) - 1) * 20;
+  const bend = edge.shape === 'curved' ? 58 : 0;
   const controlX = (startX + endX) / 2 - uy * bend;
   const controlY = (startY + endY) / 2 + ux * bend;
+  return { startX, startY, endX, endY, controlX, controlY };
+}
+
+function getEdgePath(edge: DiagramEdge, nodes: DiagramNode[]) {
+  const geometry = getEdgeGeometry(edge, nodes);
+  if (!geometry) return '';
+  const { startX, startY, endX, endY, controlX, controlY } = geometry;
+  if (edge.shape === 'straight') return `M ${startX} ${startY} L ${endX} ${endY}`;
   return `M ${startX} ${startY} Q ${controlX} ${controlY} ${endX} ${endY}`;
+}
+
+function hasStartArrow(direction: EdgeDirection) {
+  return direction === 'reverse' || direction === 'both';
+}
+
+function hasEndArrow(direction: EdgeDirection) {
+  return direction === 'forward' || direction === 'both';
+}
+
+function pointOnQuadratic(geometry: EdgeGeometry, t: number) {
+  const inverse = 1 - t;
+  return {
+    x: inverse * inverse * geometry.startX + 2 * inverse * t * geometry.controlX + t * t * geometry.endX,
+    y: inverse * inverse * geometry.startY + 2 * inverse * t * geometry.controlY + t * t * geometry.endY,
+  };
 }
 
 function wrapCanvasText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
@@ -107,7 +203,9 @@ export default function Home() {
   const [transform, setTransform] = useState<Transform>({ x: 20, y: 15, zoom: 0.82 });
   const [hydrated, setHydrated] = useState(false);
   const [savedAt, setSavedAt] = useState('準備中');
-  const [historyVersion, setHistoryVersion] = useState(0);
+  const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false });
+  const [relationDrag, setRelationDrag] = useState<null | { from: string; x: number; y: number; targetId: string | null }>(null);
+  const [exportingPptx, setExportingPptx] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<Graph>(initialGraph);
   const pastRef = useRef<Graph[]>([]);
@@ -128,8 +226,12 @@ export default function Home() {
 
   const stats = useMemo(() => {
     const scores = graph.nodes.map((node) => {
-      const incoming = graph.edges.filter((edge) => edge.to === node.id).length;
-      const outgoing = graph.edges.filter((edge) => edge.from === node.id).length;
+      const incoming = graph.edges.reduce((count, edge) => count
+        + (edge.to === node.id && hasEndArrow(edge.direction) ? 1 : 0)
+        + (edge.from === node.id && hasStartArrow(edge.direction) ? 1 : 0), 0);
+      const outgoing = graph.edges.reduce((count, edge) => count
+        + (edge.from === node.id && hasEndArrow(edge.direction) ? 1 : 0)
+        + (edge.to === node.id && hasStartArrow(edge.direction) ? 1 : 0), 0);
       return { node, incoming, outgoing, causeScore: outgoing - incoming, resultScore: incoming - outgoing };
     });
     const rootCause = [...scores].sort((a, b) => b.causeScore - a.causeScore || b.outgoing - a.outgoing)[0];
@@ -140,7 +242,7 @@ export default function Home() {
   const pushPast = useCallback((snapshot: Graph) => {
     pastRef.current = [...pastRef.current.slice(-39), cloneGraph(snapshot)];
     futureRef.current = [];
-    setHistoryVersion((version) => version + 1);
+    setHistoryState({ canUndo: true, canRedo: false });
   }, []);
 
   const commit = useCallback((updater: (current: Graph) => Graph) => {
@@ -162,7 +264,7 @@ export default function Home() {
     setSelectedEdgeId(null);
     setConnectFrom(null);
     setTool('select');
-    setHistoryVersion((version) => version + 1);
+    setHistoryState({ canUndo: pastRef.current.length > 0, canRedo: true });
   }, []);
 
   const redo = useCallback(() => {
@@ -174,7 +276,7 @@ export default function Home() {
     setGraph(graphRef.current);
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
-    setHistoryVersion((version) => version + 1);
+    setHistoryState({ canUndo: true, canRedo: futureRef.current.length > 0 });
   }, []);
 
   const deleteSelection = useCallback(() => {
@@ -194,19 +296,26 @@ export default function Home() {
   }, [commit, selectedEdgeId, selectedNodeId]);
 
   useEffect(() => {
+    let storedGraph: Graph | null = null;
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         const parsed = JSON.parse(stored) as Graph;
         if (Array.isArray(parsed.nodes) && Array.isArray(parsed.edges)) {
-          graphRef.current = parsed;
-          setGraph(parsed);
+          storedGraph = normalizeGraph(parsed);
         }
       }
     } catch {
       // Invalid local data falls back to the starter diagram.
     }
-    setHydrated(true);
+    const frame = window.requestAnimationFrame(() => {
+      if (storedGraph) {
+        graphRef.current = storedGraph;
+        setGraph(storedGraph);
+      }
+      setHydrated(true);
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, []);
 
   useEffect(() => {
@@ -215,7 +324,6 @@ export default function Home() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(graph));
       setSavedAt('保存済み');
     }, 220);
-    setSavedAt('保存中…');
     return () => window.clearTimeout(timer);
   }, [graph, hydrated]);
 
@@ -285,9 +393,9 @@ export default function Home() {
       if (connectFrom !== id) {
         const exists = graph.edges.some((edge) => edge.from === connectFrom && edge.to === id);
         if (!exists) {
-          const edgeId = `edge-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
-          commit((current) => ({ ...current, edges: [...current.edges, { id: edgeId, from: connectFrom, to: id }] }));
-          setSelectedEdgeId(edgeId);
+          const edge = makeEdge(connectFrom, id);
+          commit((current) => ({ ...current, edges: [...current.edges, edge] }));
+          setSelectedEdgeId(edge.id);
           setSelectedNodeId(null);
         }
       }
@@ -307,6 +415,47 @@ export default function Home() {
         nodes: current.nodes.map((item) => item.id === node.id ? { ...item, label: label.trim() } : item),
       }));
     }
+  };
+
+  const nodeAtPoint = (clientX: number, clientY: number) => {
+    const element = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('[data-node-id]');
+    return element?.dataset.nodeId ?? null;
+  };
+
+  const handleRelationPointerDown = (event: ReactPointerEvent<HTMLElement>, node: DiagramNode) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setRelationDrag({ from: node.id, x: node.x, y: node.y, targetId: null });
+    setSelectedNodeId(node.id);
+    setSelectedEdgeId(null);
+    setTool('select');
+    setConnectFrom(null);
+  };
+
+  const handleRelationPointerMove = (event: ReactPointerEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const point = viewportToWorld(event.clientX, event.clientY);
+    const targetId = nodeAtPoint(event.clientX, event.clientY);
+    setRelationDrag((current) => current ? { ...current, x: point.x, y: point.y, targetId } : null);
+  };
+
+  const handleRelationPointerUp = (event: ReactPointerEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const targetId = nodeAtPoint(event.clientX, event.clientY);
+    const sourceId = relationDrag?.from;
+    if (sourceId && targetId && sourceId !== targetId) {
+      const exists = graphRef.current.edges.some((edge) => edge.from === sourceId && edge.to === targetId);
+      if (!exists) {
+        const edge = makeEdge(sourceId, targetId);
+        commit((current) => ({ ...current, edges: [...current.edges, edge] }));
+        setSelectedEdgeId(edge.id);
+        setSelectedNodeId(null);
+      }
+    }
+    setRelationDrag(null);
   };
 
   const handleNodePointerDown = (event: ReactPointerEvent<HTMLButtonElement>, node: DiagramNode) => {
@@ -440,36 +589,54 @@ export default function Home() {
       }
     }
 
-    context.strokeStyle = '#697176';
-    context.lineWidth = 2;
-    graph.edges.forEach((edge) => {
-      const source = graph.nodes.find((node) => node.id === edge.from);
-      const target = graph.nodes.find((node) => node.id === edge.to);
-      if (!source || !target) return;
-      const dx = target.x - source.x;
-      const dy = target.y - source.y;
-      const length = Math.max(1, Math.hypot(dx, dy));
-      const ux = dx / length;
-      const uy = dy / length;
-      const startX = source.x + ux * 92;
-      const startY = source.y + uy * 48;
-      const endX = target.x - ux * 99;
-      const endY = target.y - uy * 52;
-      const bend = ((edge.id.charCodeAt(edge.id.length - 1) % 3) - 1) * 20;
-      const controlX = (startX + endX) / 2 - uy * bend;
-      const controlY = (startY + endY) / 2 + ux * bend;
+    const traceEdge = (edge: DiagramEdge, geometry: EdgeGeometry) => {
       context.beginPath();
-      context.moveTo(startX, startY);
-      context.quadraticCurveTo(controlX, controlY, endX, endY);
-      context.stroke();
-      const angle = Math.atan2(endY - controlY, endX - controlX);
+      context.moveTo(geometry.startX, geometry.startY);
+      if (edge.shape === 'curved') {
+        context.quadraticCurveTo(geometry.controlX, geometry.controlY, geometry.endX, geometry.endY);
+      } else {
+        context.lineTo(geometry.endX, geometry.endY);
+      }
+    };
+
+    const drawArrow = (x: number, y: number, angle: number) => {
       context.beginPath();
-      context.moveTo(endX, endY);
-      context.lineTo(endX - 12 * Math.cos(angle - Math.PI / 6), endY - 12 * Math.sin(angle - Math.PI / 6));
-      context.lineTo(endX - 12 * Math.cos(angle + Math.PI / 6), endY - 12 * Math.sin(angle + Math.PI / 6));
+      context.moveTo(x, y);
+      context.lineTo(x - 13 * Math.cos(angle - Math.PI / 6), y - 13 * Math.sin(angle - Math.PI / 6));
+      context.lineTo(x - 13 * Math.cos(angle + Math.PI / 6), y - 13 * Math.sin(angle + Math.PI / 6));
       context.closePath();
       context.fillStyle = '#697176';
       context.fill();
+    };
+
+    graph.edges.forEach((edge) => {
+      const geometry = getEdgeGeometry(edge, graph.nodes);
+      if (!geometry) return;
+      context.strokeStyle = '#697176';
+      context.lineCap = edge.lineStyle === 'dotted' ? 'round' : 'butt';
+      context.setLineDash(edge.lineStyle === 'dashed' ? [11, 7] : edge.lineStyle === 'dotted' ? [2, 7] : []);
+      if (edge.lineStyle === 'double') {
+        context.lineWidth = 6;
+        traceEdge(edge, geometry);
+        context.stroke();
+        context.strokeStyle = '#fcfdfc';
+        context.lineWidth = 2.2;
+        traceEdge(edge, geometry);
+        context.stroke();
+      } else {
+        context.lineWidth = 2;
+        traceEdge(edge, geometry);
+        context.stroke();
+      }
+      context.setLineDash([]);
+      const startAngle = edge.shape === 'curved'
+        ? Math.atan2(geometry.startY - geometry.controlY, geometry.startX - geometry.controlX)
+        : Math.atan2(geometry.startY - geometry.endY, geometry.startX - geometry.endX);
+      const endAngle = edge.shape === 'curved'
+        ? Math.atan2(geometry.endY - geometry.controlY, geometry.endX - geometry.controlX)
+        : Math.atan2(geometry.endY - geometry.startY, geometry.endX - geometry.startX);
+      if (hasStartArrow(edge.direction)) drawArrow(geometry.startX, geometry.startY, startAngle);
+      if (hasEndArrow(edge.direction)) drawArrow(geometry.endX, geometry.endY, endAngle);
     });
 
     graph.nodes.forEach((node) => {
@@ -504,6 +671,135 @@ export default function Home() {
     }, 'image/png');
   };
 
+  const exportPptx = async () => {
+    if (graph.nodes.length === 0 || exportingPptx) return;
+    setExportingPptx(true);
+    try {
+      const { default: PptxGenJS } = await import('pptxgenjs');
+      const pptx = new PptxGenJS();
+      pptx.layout = 'LAYOUT_WIDE';
+      pptx.author = 'diagramMaker';
+      pptx.company = 'diagramMaker';
+      pptx.subject = '連関図';
+      pptx.title = '連関図';
+
+      const slide = pptx.addSlide();
+      slide.background = { color: 'FCFDFC' };
+      const slideWidth = 13.333;
+      const slideHeight = 7.5;
+      const margin = 0.5;
+      const minX = Math.min(...graph.nodes.map((node) => node.x - (node.tone === 'theme' ? 94 : NODE_WIDTH / 2)));
+      const maxX = Math.max(...graph.nodes.map((node) => node.x + (node.tone === 'theme' ? 94 : NODE_WIDTH / 2)));
+      const minY = Math.min(...graph.nodes.map((node) => node.y - (node.tone === 'theme' ? 48 : NODE_HEIGHT / 2)));
+      const maxY = Math.max(...graph.nodes.map((node) => node.y + (node.tone === 'theme' ? 48 : NODE_HEIGHT / 2)));
+      const contentWidth = Math.max(1, maxX - minX);
+      const contentHeight = Math.max(1, maxY - minY);
+      const scale = Math.min((slideWidth - margin * 2) / contentWidth, (slideHeight - margin * 2) / contentHeight);
+      const offsetX = (slideWidth - contentWidth * scale) / 2 - minX * scale;
+      const offsetY = (slideHeight - contentHeight * scale) / 2 - minY * scale;
+      const toSlide = (point: { x: number; y: number }) => ({ x: point.x * scale + offsetX, y: point.y * scale + offsetY });
+
+      const addLine = (
+        start: { x: number; y: number },
+        end: { x: number; y: number },
+        edge: DiagramEdge,
+        arrowAtStart: boolean,
+        arrowAtEnd: boolean,
+        railOffset = 0,
+      ) => {
+        let startPoint = toSlide(start);
+        let endPoint = toSlide(end);
+        if (railOffset) {
+          const dx = endPoint.x - startPoint.x;
+          const dy = endPoint.y - startPoint.y;
+          const length = Math.max(0.001, Math.hypot(dx, dy));
+          const offsetX = -dy / length * railOffset;
+          const offsetY = dx / length * railOffset;
+          startPoint = { x: startPoint.x + offsetX, y: startPoint.y + offsetY };
+          endPoint = { x: endPoint.x + offsetX, y: endPoint.y + offsetY };
+        }
+        const dx = endPoint.x - startPoint.x;
+        const dy = endPoint.y - startPoint.y;
+        const x = Math.min(startPoint.x, endPoint.x);
+        const y = Math.min(startPoint.y, endPoint.y);
+        const p1IsHead = dx > 0 || (Math.abs(dx) < 0.0001 && dy >= 0);
+        const beginArrow = p1IsHead ? arrowAtStart : arrowAtEnd;
+        const endArrow = p1IsHead ? arrowAtEnd : arrowAtStart;
+        const dashType: 'solid' | 'dash' | 'sysDot' = edge.lineStyle === 'dashed'
+          ? 'dash'
+          : edge.lineStyle === 'dotted' ? 'sysDot' : 'solid';
+        slide.addShape(pptx.ShapeType.line, {
+          x,
+          y,
+          w: Math.max(0.001, Math.abs(dx)),
+          h: Math.max(0.001, Math.abs(dy)),
+          flipV: dx * dy < 0,
+          line: {
+            color: '697176',
+            width: edge.lineStyle === 'double' ? 1 : 1.5,
+            dashType,
+            beginArrowType: beginArrow ? 'triangle' : 'none',
+            endArrowType: endArrow ? 'triangle' : 'none',
+          },
+        });
+      };
+
+      graph.edges.forEach((edge) => {
+        const geometry = getEdgeGeometry(edge, graph.nodes);
+        if (!geometry) return;
+        const points = edge.shape === 'curved'
+          ? Array.from({ length: 7 }, (_, index) => pointOnQuadratic(geometry, index / 6))
+          : [
+              { x: geometry.startX, y: geometry.startY },
+              { x: geometry.endX, y: geometry.endY },
+            ];
+        points.slice(0, -1).forEach((point, index) => {
+          const nextPoint = points[index + 1];
+          const arrowAtStart = index === 0 && hasStartArrow(edge.direction);
+          const arrowAtEnd = index === points.length - 2 && hasEndArrow(edge.direction);
+          if (edge.lineStyle === 'double') {
+            addLine(point, nextPoint, edge, arrowAtStart, arrowAtEnd, -0.025);
+            addLine(point, nextPoint, edge, arrowAtStart, arrowAtEnd, 0.025);
+          } else {
+            addLine(point, nextPoint, edge, arrowAtStart, arrowAtEnd);
+          }
+        });
+      });
+
+      graph.nodes.forEach((node) => {
+        const colors = toneColors[node.tone];
+        const width = (node.tone === 'theme' ? 188 : NODE_WIDTH) * scale;
+        const height = (node.tone === 'theme' ? 96 : NODE_HEIGHT) * scale;
+        const center = toSlide(node);
+        slide.addText(node.label.replaceAll('\n', ' '), {
+          x: center.x - width / 2,
+          y: center.y - height / 2,
+          w: width,
+          h: height,
+          shape: pptx.ShapeType.roundRect,
+          fill: { color: colors.fill.slice(1) },
+          line: { color: colors.stroke.slice(1), width: node.tone === 'theme' ? 1.8 : 1 },
+          color: colors.text.slice(1),
+          fontFace: 'Yu Gothic',
+          fontSize: Math.max(9, Math.min(15, 14 * scale / 0.012)),
+          bold: true,
+          align: 'center',
+          valign: 'middle',
+          margin: 0.08,
+          breakLine: false,
+          fit: 'shrink',
+        });
+      });
+
+      await pptx.writeFile({ fileName: `連関図-${new Date().toISOString().slice(0, 10)}.pptx`, compression: true });
+    } catch (error) {
+      console.error(error);
+      window.alert('PowerPointの書き出しに失敗しました。もう一度お試しください。');
+    } finally {
+      setExportingPptx(false);
+    }
+  };
+
   const resetGraph = () => {
     if (!window.confirm('現在の連関図を消して、最初の例に戻しますか？')) return;
     commit(() => cloneGraph(initialGraph));
@@ -517,6 +813,14 @@ export default function Home() {
     commit((current) => ({
       ...current,
       nodes: current.nodes.map((node) => node.id === selectedNodeId ? { ...node, ...patch } : node),
+    }));
+  };
+
+  const updateSelectedEdge = (patch: Partial<Pick<DiagramEdge, 'direction' | 'shape' | 'lineStyle'>>) => {
+    if (!selectedEdgeId) return;
+    commit((current) => ({
+      ...current,
+      edges: current.edges.map((edge) => edge.id === selectedEdgeId ? { ...edge, ...patch } : edge),
     }));
   };
 
@@ -555,19 +859,43 @@ export default function Home() {
                 ))}
               </div>
               <div className="node-degree">
-                <span>入ってくる矢印 <strong>{graph.edges.filter((edge) => edge.to === selectedNode.id).length}</strong></span>
-                <span>出ていく矢印 <strong>{graph.edges.filter((edge) => edge.from === selectedNode.id).length}</strong></span>
+                <span>入ってくる矢印 <strong>{graph.edges.reduce((count, edge) => count + (edge.to === selectedNode.id && hasEndArrow(edge.direction) ? 1 : 0) + (edge.from === selectedNode.id && hasStartArrow(edge.direction) ? 1 : 0), 0)}</strong></span>
+                <span>出ていく矢印 <strong>{graph.edges.reduce((count, edge) => count + (edge.from === selectedNode.id && hasEndArrow(edge.direction) ? 1 : 0) + (edge.to === selectedNode.id && hasStartArrow(edge.direction) ? 1 : 0), 0)}</strong></span>
               </div>
               <button className="danger-button" type="button" onClick={deleteSelection}>要素を削除</button>
             </div>
           ) : selectedEdge ? (
             <div className="panel-section inspector">
-              <div className="section-heading"><p className="panel-label">選択中の関係</p><span>矢印</span></div>
+              <div className="section-heading"><p className="panel-label">選択中の関係</p><span>コネクタ</span></div>
               <div className="edge-summary">
                 <strong>{fromNode?.label.replaceAll('\n', ' ')}</strong>
-                <span>から</span>
+                <span>{directionNames[selectedEdge.direction]}</span>
                 <strong>{toNode?.label.replaceAll('\n', ' ')}</strong>
-                <span>へ</span>
+              </div>
+              <p className="field-label">形状</p>
+              <div className="edge-option-grid two-columns">
+                {(Object.keys(shapeNames) as EdgeShape[]).map((shape) => (
+                  <button key={shape} className={selectedEdge.shape === shape ? 'selected' : ''} type="button" onClick={() => updateSelectedEdge({ shape })}>
+                    <span className={`shape-preview ${shape}`} />{shapeNames[shape]}
+                  </button>
+                ))}
+              </div>
+              <p className="field-label">矢印</p>
+              <div className="edge-option-grid direction-grid">
+                {(Object.keys(directionNames) as EdgeDirection[]).map((direction) => (
+                  <button key={direction} className={selectedEdge.direction === direction ? 'selected' : ''} type="button" onClick={() => updateSelectedEdge({ direction })} title={directionNames[direction]}>
+                    <span className="direction-preview" aria-hidden="true">{{ forward: '→', reverse: '←', both: '↔', none: '—' }[direction]}</span>
+                    <small>{directionNames[direction]}</small>
+                  </button>
+                ))}
+              </div>
+              <p className="field-label">線</p>
+              <div className="edge-option-grid line-style-grid">
+                {(Object.keys(lineStyleNames) as EdgeLineStyle[]).map((lineStyle) => (
+                  <button key={lineStyle} className={selectedEdge.lineStyle === lineStyle ? 'selected' : ''} type="button" onClick={() => updateSelectedEdge({ lineStyle })}>
+                    <span className={`line-preview ${lineStyle}`} />{lineStyleNames[lineStyle]}
+                  </button>
+                ))}
               </div>
               <button className="danger-button" type="button" onClick={deleteSelection}>関係を削除</button>
             </div>
@@ -589,7 +917,7 @@ export default function Home() {
 
           <div className="tip-card">
             <span className="tip-mark">?</span>
-            <p>{tool === 'connect' ? (connectFrom ? '次に、矢印の行き先を選びます。' : '矢印の出発点になる要素を選びます。') : 'ドラッグで移動、ダブルクリックで名前を編集。空白をドラッグすると表示範囲を動かせます。'}</p>
+            <p>{tool === 'connect' ? (connectFrom ? '次に、矢印の行き先を選びます。' : '矢印の出発点になる要素を選びます。') : '要素右端の＋を別の要素へドラッグすると、関係を直接追加できます。'}</p>
           </div>
           <button className="reset-button" type="button" onClick={resetGraph}>最初の例に戻す</button>
         </aside>
@@ -602,13 +930,14 @@ export default function Home() {
             </div>
             <div className="toolbar-spacer" />
             <div className="toolbar-group">
-              <button type="button" onClick={undo} disabled={pastRef.current.length === 0} aria-label="元に戻す">↶</button>
-              <button type="button" onClick={redo} disabled={futureRef.current.length === 0} aria-label="やり直す">↷</button>
+              <button type="button" onClick={undo} disabled={!historyState.canUndo} aria-label="元に戻す">↶</button>
+              <button type="button" onClick={redo} disabled={!historyState.canRedo} aria-label="やり直す">↷</button>
               <button type="button" onClick={deleteSelection} disabled={!selectedNodeId && !selectedEdgeId} aria-label="選択項目を削除">⌫</button>
             </div>
             <div className="toolbar-divider" />
             <button type="button" onClick={fitView}>全体表示</button>
-            <button className="export-button" type="button" onClick={exportPng} disabled={graph.nodes.length === 0}>画像に保存</button>
+            <button className="export-button" type="button" onClick={exportPng} disabled={graph.nodes.length === 0}>PNG</button>
+            <button className="export-button pptx-button" type="button" title="Keynoteでも開いて編集できます" onClick={exportPptx} disabled={graph.nodes.length === 0 || exportingPptx}>{exportingPptx ? '作成中…' : 'PowerPoint'}</button>
           </div>
 
           <div
@@ -630,26 +959,39 @@ export default function Home() {
             <div className="scene" style={{ width: WORLD_WIDTH, height: WORLD_HEIGHT, transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.zoom})` }}>
               <svg className="edges" width={WORLD_WIDTH} height={WORLD_HEIGHT} aria-label="関係を表す矢印">
                 <defs>
-                  <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-                    <path d="M 0 0 L 10 5 L 0 10 z" />
+                  <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" />
                   </marker>
                 </defs>
                 {graph.edges.map((edge) => {
                   const path = getEdgePath(edge, graph.nodes);
                   const selected = edge.id === selectedEdgeId;
+                  const markerStart = hasStartArrow(edge.direction) ? 'url(#arrow)' : undefined;
+                  const markerEnd = hasEndArrow(edge.direction) ? 'url(#arrow)' : undefined;
                   return (
                     <g key={edge.id} className={selected ? 'selected' : ''}>
                       <path className="edge-hit" d={path} onClick={(event) => { event.stopPropagation(); setSelectedEdgeId(edge.id); setSelectedNodeId(null); setTool('select'); setConnectFrom(null); }} />
-                      <path className="edge-line" d={path} />
+                      {edge.lineStyle === 'double' ? (
+                        <>
+                          <path className="edge-line edge-double-outer" d={path} markerStart={markerStart} markerEnd={markerEnd} />
+                          <path className="edge-line edge-double-inner" d={path} />
+                        </>
+                      ) : (
+                        <path className={`edge-line ${edge.lineStyle}`} d={path} markerStart={markerStart} markerEnd={markerEnd} />
+                      )}
                     </g>
                   );
                 })}
+                {relationDrag && (
+                  <path className="edge-preview" d={`M ${graph.nodes.find((node) => node.id === relationDrag.from)?.x ?? relationDrag.x} ${graph.nodes.find((node) => node.id === relationDrag.from)?.y ?? relationDrag.y} L ${relationDrag.x} ${relationDrag.y}`} markerEnd="url(#arrow)" />
+                )}
               </svg>
 
               {graph.nodes.map((node) => (
                 <button
-                  className={`diagram-node ${node.tone} ${selectedNodeId === node.id ? 'selected' : ''} ${connectFrom === node.id ? 'connect-source' : ''}`}
+                  className={`diagram-node ${node.tone} ${selectedNodeId === node.id ? 'selected' : ''} ${connectFrom === node.id ? 'connect-source' : ''} ${relationDrag?.targetId === node.id && relationDrag.from !== node.id ? 'connect-target' : ''}`}
                   key={node.id}
+                  data-node-id={node.id}
                   style={{ left: node.x, top: node.y }}
                   type="button"
                   aria-label={`${node.label.replaceAll('\n', ' ')}、${toneNames[node.tone]}`}
@@ -661,7 +1003,16 @@ export default function Home() {
                   onPointerCancel={handlePointerUp}
                 >
                   {node.label.split('\n').map((line, index) => <span key={`${line}-${index}`}>{line || ' '}</span>)}
-                  {tool === 'connect' && <i className="connection-dot" />}
+                  <span
+                    className="connection-handle"
+                    title="別の要素へドラッグして関係を追加"
+                    aria-hidden="true"
+                    onClick={(event) => event.stopPropagation()}
+                    onPointerDown={(event) => handleRelationPointerDown(event, node)}
+                    onPointerMove={handleRelationPointerMove}
+                    onPointerUp={handleRelationPointerUp}
+                    onPointerCancel={() => setRelationDrag(null)}
+                  >＋</span>
                 </button>
               ))}
             </div>
@@ -672,7 +1023,7 @@ export default function Home() {
                 <span>ここから考えをつないでいきましょう</span>
               </button>
             ) : (
-              <p className="canvas-hint">空白をダブルクリックして追加 ・ ⌘ / Ctrl + ホイールで拡大縮小</p>
+              <p className="canvas-hint">右端の＋をドラッグして接続 ・ 空白をダブルクリックして追加 ・ ⌘ / Ctrl + ホイールで拡大縮小</p>
             )}
 
             {tool === 'connect' && (
@@ -687,7 +1038,6 @@ export default function Home() {
           </div>
         </div>
       </section>
-      <span className="sr-only" aria-hidden="true">{historyVersion}</span>
     </main>
   );
 }
