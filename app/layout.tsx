@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 
-const siteUrl = process.env.SITE_URL ?? 'https://renkanzu-personal.silver-amber-2723.chatgpt.site';
+const siteUrl = process.env.SITE_URL ?? 'https://psychologyKM.github.io/diagramMaker/';
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
