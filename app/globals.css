@@ -18,7 +18,7 @@ html, body { min-height: 100%; }
 body { margin: 0; background: var(--paper); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", system-ui, sans-serif; }
 button, input, textarea { font: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
-button:focus-visible, textarea:focus-visible { outline: 3px solid rgba(39, 106, 87, .25); outline-offset: 2px; }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid rgba(39, 106, 87, .25); outline-offset: 2px; }
 
 .app-shell {
   min-height: 100vh;
@@ -72,6 +72,7 @@ h1 { margin: 0; font-size: 27px; line-height: 1; letter-spacing: -.045em; }
 .analysis-card strong:last-child { margin-bottom: 0; }
 
 .inspector textarea { width: 100%; resize: vertical; border: 1px solid var(--line); border-radius: 9px; background: white; padding: 9px 10px; color: var(--ink); font-size: 12px; line-height: 1.5; }
+.inspector > input:not([type]) { width: 100%; height: 37px; border: 1px solid var(--line); border-radius: 9px; background: white; padding: 0 10px; color: var(--ink); font-size: 11px; }
 .field-label { display: block; margin: 13px 0 7px; color: #77827f; font-size: 10px; font-weight: 700; }
 .tone-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .tone-picker button { height: 31px; display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 8px; background: white; color: #5d6966; cursor: pointer; font-size: 9px; }
@@ -104,8 +105,23 @@ h1 { margin: 0; font-size: 27px; line-height: 1; letter-spacing: -.045em; }
 .line-preview.dashed { border-top-style: dashed; }
 .line-preview.dotted { border-top-style: dotted; }
 .line-preview.double { border-top: 4px double currentColor; }
-.curve-help { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-top: 7px; color: #7c8885; font-size: 8px; line-height: 1.4; }
-.curve-help button { flex: none; padding: 3px 6px; border: 0; background: transparent; color: var(--green); cursor: pointer; font-size: 8px; text-decoration: underline; text-underline-offset: 2px; }
+.curve-help, .anchor-help { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-top: 7px; color: #7c8885; font-size: 8px; line-height: 1.4; }
+.curve-help button, .anchor-help button { flex: none; padding: 3px 6px; border: 0; background: transparent; color: var(--green); cursor: pointer; font-size: 8px; text-decoration: underline; text-underline-offset: 2px; }
+.color-palette { display: flex; flex-wrap: wrap; gap: 6px; }
+.color-palette > button, .custom-color { position: relative; width: 24px; height: 24px; flex: none; overflow: hidden; border: 1px solid #bcc8c3; border-radius: 7px; cursor: pointer; }
+.color-palette > button.selected { box-shadow: 0 0 0 2px white, 0 0 0 4px var(--green); }
+.custom-color { display: grid; place-items: center; background: conic-gradient(#df6b63, #e7c85a, #70b984, #6ca7da, #9b77cc, #df6b63); color: white; font-size: 15px; font-weight: 800; text-shadow: 0 1px 3px rgba(0,0,0,.35); }
+.custom-color input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.style-control-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 9px; }
+.style-control-row label { display: flex; align-items: center; gap: 6px; color: #77827f; font-size: 9px; font-weight: 700; }
+.style-control-row input[type='color'] { width: 30px; height: 25px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: white; cursor: pointer; }
+.style-control-row button { border: 0; background: transparent; color: var(--green); cursor: pointer; font-size: 8px; text-decoration: underline; text-underline-offset: 2px; }
+.font-size-control .field-label { display: flex; justify-content: space-between; }
+.font-size-control .field-label strong { color: var(--green); }
+.font-size-control input[type='range'] { width: 100%; accent-color: var(--green); cursor: pointer; }
+.duplicate-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.duplicate-actions button { min-height: 34px; border: 1px solid var(--line); border-radius: 8px; background: white; color: #5f6d69; cursor: pointer; font-size: 9px; font-weight: 700; }
+.duplicate-actions button:hover { border-color: var(--green); background: #eef5f1; color: var(--green); }
 
 .tip-card { margin-top: 25px; padding: 13px; border-radius: 12px; background: #eef5f1; color: #53615d; font-size: 10px; line-height: 1.65; }
 .tip-card p { margin: 7px 0 0; }
@@ -141,6 +157,7 @@ h1 { margin: 0; font-size: 27px; line-height: 1; letter-spacing: -.045em; }
 }
 .diagram-canvas:active { cursor: grabbing; }
 .diagram-canvas.connecting { cursor: crosshair; }
+.diagram-canvas.selecting, .diagram-canvas.selecting:active, .diagram-canvas.selecting .diagram-node { cursor: crosshair; }
 .scene { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
 .edges { position: absolute; inset: 0; overflow: visible; }
 .edges marker path { fill: context-stroke; }
@@ -159,6 +176,11 @@ h1 { margin: 0; font-size: 27px; line-height: 1; letter-spacing: -.045em; }
 .curve-control line { stroke: rgba(39, 106, 87, .5); stroke-width: 1.5; stroke-dasharray: 4 4; pointer-events: none; }
 .curve-control circle { fill: white; stroke: var(--green); stroke-width: 3; cursor: move; pointer-events: all; filter: drop-shadow(0 3px 5px rgba(32,80,65,.2)); }
 .curve-control circle:hover, .curve-control circle:focus-visible { fill: #e8f2ed; stroke-width: 4; outline: none; }
+.endpoint-control { fill: white; stroke: var(--green); stroke-width: 3; cursor: crosshair; pointer-events: all; filter: drop-shadow(0 3px 5px rgba(32,80,65,.2)); }
+.endpoint-control.to { fill: var(--green); stroke: white; }
+.endpoint-control:hover, .endpoint-control:focus-visible { stroke-width: 4; outline: none; }
+.edge-label { overflow: visible; pointer-events: none; }
+.edge-label > div { height: 28px; margin-top: 3px; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.96); color: #46524f; box-shadow: 0 3px 10px rgba(39,63,55,.08); font-size: 11px; font-weight: 700; line-height: 1; text-overflow: ellipsis; white-space: nowrap; }
 
 .diagram-node {
   position: absolute;
@@ -190,11 +212,15 @@ h1 { margin: 0; font-size: 27px; line-height: 1; letter-spacing: -.045em; }
 .diagram-node.cause { border-color: #e5cf9f; background: var(--warm); color: #624d2a; }
 .diagram-node.neutral { border-color: #bed1c8; background: var(--green-soft); color: #29483f; }
 .diagram-node.selected { box-shadow: 0 0 0 4px rgba(39, 106, 87, .18), 0 12px 28px rgba(36, 75, 63, .15); }
+.diagram-node.multi-selected { box-shadow: 0 0 0 4px rgba(46, 112, 171, .25), 0 0 0 7px rgba(46, 112, 171, .1), 0 12px 28px rgba(36, 75, 63, .15); }
 .diagram-node.connect-source { box-shadow: 0 0 0 5px rgba(39, 106, 87, .24), 0 12px 28px rgba(36, 75, 63, .15); }
 .diagram-node.connect-target { box-shadow: 0 0 0 6px rgba(39, 106, 87, .28), 0 12px 28px rgba(36, 75, 63, .17); transform: translate(-50%, -50%) scale(1.025); }
 .connection-handle { position: absolute; z-index: 2; right: -10px; top: 50%; width: 20px; height: 20px; transform: translateY(-50%) scale(.72); display: grid; place-items: center; border: 3px solid white; border-radius: 50%; background: var(--green); color: white; box-shadow: 0 0 0 1px var(--green), 0 4px 10px rgba(27,79,63,.22); cursor: crosshair; font: 700 12px/1 Arial, sans-serif; opacity: 0; transition: opacity .15s ease, transform .15s ease; }
 .diagram-node:hover .connection-handle, .diagram-node.selected .connection-handle, .diagram-canvas.connecting .connection-handle { opacity: 1; transform: translateY(-50%) scale(1); }
 .connection-handle:hover { background: var(--green-deep); }
+.diagram-canvas.selecting .connection-handle { display: none; }
+.selection-overlay { position: absolute; z-index: 4; inset: 0; overflow: visible; pointer-events: none; }
+.selection-overlay rect, .selection-overlay path { fill: rgba(46, 112, 171, .1); stroke: #2e70ab; stroke-width: 2; stroke-dasharray: 8 6; vector-effect: non-scaling-stroke; }
 
 .canvas-hint { position: absolute; z-index: 3; left: 50%; bottom: 21px; transform: translateX(-50%); width: max-content; max-width: calc(100% - 190px); margin: 0; color: #97a19e; font-size: 9px; pointer-events: none; }
 .mode-banner { position: absolute; z-index: 5; top: 14px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #c2d6cd; border-radius: 999px; background: rgba(244,249,246,.96); color: #466057; box-shadow: 0 7px 22px rgba(41,76,65,.12); font-size: 10px; }

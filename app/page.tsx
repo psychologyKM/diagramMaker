@@ -7,18 +7,35 @@ type Tone = 'theme' | 'cause' | 'result' | 'neutral';
 type EdgeDirection = 'forward' | 'reverse' | 'both' | 'none';
 type EdgeShape = 'straight' | 'curved';
 type EdgeLineStyle = 'solid' | 'dashed' | 'dotted' | 'double';
-type DiagramNode = { id: string; label: string; x: number; y: number; tone: Tone };
+type EdgeAnchor = { x: number; y: number };
+type DiagramNode = {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  tone: Tone;
+  fillColor: string | null;
+  textColor: string | null;
+  fontSize: number;
+};
 type DiagramEdge = {
   id: string;
   from: string;
   to: string;
+  label: string;
   direction: EdgeDirection;
   shape: EdgeShape;
   lineStyle: EdgeLineStyle;
   bend: number;
+  fromAnchor: EdgeAnchor | null;
+  toAnchor: EdgeAnchor | null;
 };
 type Graph = { nodes: DiagramNode[]; edges: DiagramEdge[] };
 type Transform = { x: number; y: number; zoom: number };
+type CanvasTool = 'select' | 'connect' | 'marquee' | 'lasso';
+type SelectionDraft =
+  | { kind: 'marquee'; start: { x: number; y: number }; current: { x: number; y: number } }
+  | { kind: 'lasso'; points: { x: number; y: number }[] };
 type EdgeGeometry = {
   startX: number;
   startY: number;
@@ -48,21 +65,22 @@ const NODE_WIDTH = 176;
 const NODE_HEIGHT = 86;
 const WORLD_WIDTH = 2200;
 const WORLD_HEIGHT = 1500;
+const NODE_PALETTE = ['#276a57', '#e3eee9', '#fff2d7', '#e2ecf7', '#f6dada', '#eee3f4', '#f2eee2', '#ffffff'];
 
 const initialGraph: Graph = {
   nodes: [
-    { id: 'theme', label: 'チームの進捗が\n見えにくい', x: 670, y: 390, tone: 'theme' },
-    { id: 'meeting', label: '定例会議が\n長い', x: 330, y: 210, tone: 'cause' },
-    { id: 'updates', label: '更新タイミングが\nバラバラ', x: 300, y: 555, tone: 'cause' },
-    { id: 'owner', label: '担当者が\n曖昧', x: 1040, y: 205, tone: 'result' },
-    { id: 'delay', label: '判断が\n遅れる', x: 1080, y: 550, tone: 'result' },
+    { id: 'theme', label: 'チームの進捗が\n見えにくい', x: 670, y: 390, tone: 'theme', fillColor: null, textColor: null, fontSize: 14 },
+    { id: 'meeting', label: '定例会議が\n長い', x: 330, y: 210, tone: 'cause', fillColor: null, textColor: null, fontSize: 13 },
+    { id: 'updates', label: '更新タイミングが\nバラバラ', x: 300, y: 555, tone: 'cause', fillColor: null, textColor: null, fontSize: 13 },
+    { id: 'owner', label: '担当者が\n曖昧', x: 1040, y: 205, tone: 'result', fillColor: null, textColor: null, fontSize: 13 },
+    { id: 'delay', label: '判断が\n遅れる', x: 1080, y: 550, tone: 'result', fillColor: null, textColor: null, fontSize: 13 },
   ],
   edges: [
-    { id: 'e1', from: 'meeting', to: 'theme', direction: 'forward', shape: 'straight', lineStyle: 'solid', bend: 58 },
-    { id: 'e2', from: 'updates', to: 'theme', direction: 'forward', shape: 'curved', lineStyle: 'solid', bend: -92 },
-    { id: 'e3', from: 'theme', to: 'owner', direction: 'forward', shape: 'straight', lineStyle: 'solid', bend: 58 },
-    { id: 'e4', from: 'theme', to: 'delay', direction: 'forward', shape: 'curved', lineStyle: 'dashed', bend: 84 },
-    { id: 'e5', from: 'meeting', to: 'owner', direction: 'both', shape: 'curved', lineStyle: 'dotted', bend: 118 },
+    { id: 'e1', from: 'meeting', to: 'theme', label: '', direction: 'forward', shape: 'straight', lineStyle: 'solid', bend: 58, fromAnchor: null, toAnchor: null },
+    { id: 'e2', from: 'updates', to: 'theme', label: '', direction: 'forward', shape: 'curved', lineStyle: 'solid', bend: -92, fromAnchor: null, toAnchor: null },
+    { id: 'e3', from: 'theme', to: 'owner', label: '', direction: 'forward', shape: 'straight', lineStyle: 'solid', bend: 58, fromAnchor: null, toAnchor: null },
+    { id: 'e4', from: 'theme', to: 'delay', label: '', direction: 'forward', shape: 'curved', lineStyle: 'dashed', bend: 84, fromAnchor: null, toAnchor: null },
+    { id: 'e5', from: 'meeting', to: 'owner', label: '', direction: 'both', shape: 'curved', lineStyle: 'dotted', bend: 118, fromAnchor: null, toAnchor: null },
   ],
 };
 
@@ -99,10 +117,35 @@ const toneColors: Record<Tone, { fill: string; stroke: string; text: string }> =
   neutral: { fill: '#e3eee9', stroke: '#bed1c8', text: '#29483f' },
 };
 
+function isHexColor(value: unknown): value is string {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
+}
+
+function contrastingTextColor(color: string) {
+  const red = Number.parseInt(color.slice(1, 3), 16);
+  const green = Number.parseInt(color.slice(3, 5), 16);
+  const blue = Number.parseInt(color.slice(5, 7), 16);
+  return (red * 299 + green * 587 + blue * 114) / 1000 > 158 ? '#263330' : '#ffffff';
+}
+
+function getNodeColors(node: DiagramNode) {
+  const defaults = toneColors[node.tone];
+  const fill = node.fillColor ?? defaults.fill;
+  return {
+    fill,
+    stroke: node.fillColor ?? defaults.stroke,
+    text: node.textColor ?? (node.fillColor ? contrastingTextColor(fill) : defaults.text),
+  };
+}
+
 function cloneGraph(graph: Graph): Graph {
   return {
     nodes: graph.nodes.map((node) => ({ ...node })),
-    edges: graph.edges.map((edge) => ({ ...edge })),
+    edges: graph.edges.map((edge) => ({
+      ...edge,
+      fromAnchor: edge.fromAnchor ? { ...edge.fromAnchor } : null,
+      toAnchor: edge.toAnchor ? { ...edge.toAnchor } : null,
+    })),
   };
 }
 
@@ -118,29 +161,85 @@ function isEdgeLineStyle(value: unknown): value is EdgeLineStyle {
   return value === 'solid' || value === 'dashed' || value === 'dotted' || value === 'double';
 }
 
+function normalizeAnchor(value: unknown): EdgeAnchor | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as { x?: unknown; y?: unknown };
+  if (typeof candidate.x !== 'number' || typeof candidate.y !== 'number' || !Number.isFinite(candidate.x) || !Number.isFinite(candidate.y)) return null;
+  const magnitude = Math.max(Math.abs(candidate.x), Math.abs(candidate.y));
+  if (magnitude < 0.001) return null;
+  return { x: candidate.x / magnitude, y: candidate.y / magnitude };
+}
+
 function normalizeGraph(value: Graph): Graph {
   return {
-    nodes: value.nodes,
+    nodes: value.nodes.map((node) => ({
+      ...node,
+      fillColor: isHexColor(node.fillColor) ? node.fillColor : null,
+      textColor: isHexColor(node.textColor) ? node.textColor : null,
+      fontSize: Number.isFinite(node.fontSize) ? Math.max(9, Math.min(28, node.fontSize)) : node.tone === 'theme' ? 14 : 13,
+    })),
     edges: value.edges.map((edge) => ({
       ...edge,
+      label: typeof edge.label === 'string' ? edge.label : '',
       direction: isEdgeDirection(edge.direction) ? edge.direction : 'forward',
       shape: isEdgeShape(edge.shape) ? edge.shape : 'curved',
       lineStyle: isEdgeLineStyle(edge.lineStyle) ? edge.lineStyle : 'solid',
       bend: Number.isFinite(edge.bend) ? Math.max(-700, Math.min(700, edge.bend)) : 58,
+      fromAnchor: normalizeAnchor(edge.fromAnchor),
+      toAnchor: normalizeAnchor(edge.toAnchor),
     })),
   };
 }
 
+function makeId(prefix: 'node' | 'edge') {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function makeEdge(from: string, to: string): DiagramEdge {
   return {
-    id: `edge-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+    id: makeId('edge'),
     from,
     to,
+    label: '',
     direction: 'forward',
     shape: 'straight',
     lineStyle: 'solid',
     bend: 58,
+    fromAnchor: null,
+    toAnchor: null,
   };
+}
+
+function getNodeSize(node: DiagramNode) {
+  return node.tone === 'theme'
+    ? { width: 188, height: 96 }
+    : { width: NODE_WIDTH, height: NODE_HEIGHT };
+}
+
+function autoAnchor(node: DiagramNode, other: DiagramNode): EdgeAnchor {
+  const { width, height } = getNodeSize(node);
+  const normalizedX = (other.x - node.x) / (width / 2);
+  const normalizedY = (other.y - node.y) / (height / 2);
+  const magnitude = Math.max(Math.abs(normalizedX), Math.abs(normalizedY));
+  if (magnitude < 0.001) return { x: 1, y: 0 };
+  return { x: normalizedX / magnitude, y: normalizedY / magnitude };
+}
+
+function anchorToPoint(node: DiagramNode, anchor: EdgeAnchor) {
+  const { width, height } = getNodeSize(node);
+  return {
+    x: node.x + anchor.x * width / 2,
+    y: node.y + anchor.y * height / 2,
+  };
+}
+
+function snapPointToNode(node: DiagramNode, point: { x: number; y: number }): EdgeAnchor {
+  const { width, height } = getNodeSize(node);
+  const normalizedX = (point.x - node.x) / (width / 2);
+  const normalizedY = (point.y - node.y) / (height / 2);
+  const magnitude = Math.max(Math.abs(normalizedX), Math.abs(normalizedY));
+  if (magnitude < 0.001) return { x: 1, y: 0 };
+  return { x: normalizedX / magnitude, y: normalizedY / magnitude };
 }
 
 function getEdgeGeometry(edge: DiagramEdge, nodes: DiagramNode[]): EdgeGeometry | null {
@@ -148,17 +247,17 @@ function getEdgeGeometry(edge: DiagramEdge, nodes: DiagramNode[]): EdgeGeometry 
   const target = nodes.find((node) => node.id === edge.to);
   if (!source || !target) return null;
 
-  const dx = target.x - source.x;
-  const dy = target.y - source.y;
+  const start = anchorToPoint(source, edge.fromAnchor ?? autoAnchor(source, target));
+  const end = anchorToPoint(target, edge.toAnchor ?? autoAnchor(target, source));
+  const startX = start.x;
+  const startY = start.y;
+  const endX = end.x;
+  const endY = end.y;
+  const dx = endX - startX;
+  const dy = endY - startY;
   const length = Math.max(1, Math.hypot(dx, dy));
   const ux = dx / length;
   const uy = dy / length;
-  const sourceOffset = Math.min(NODE_WIDTH / 2, NODE_HEIGHT / 2 / Math.max(Math.abs(uy), 0.55));
-  const targetOffset = Math.min(NODE_WIDTH / 2 + 5, NODE_HEIGHT / 2 / Math.max(Math.abs(uy), 0.55) + 7);
-  const startX = source.x + ux * sourceOffset;
-  const startY = source.y + uy * sourceOffset;
-  const endX = target.x - ux * targetOffset;
-  const endY = target.y - uy * targetOffset;
   const bend = edge.shape === 'curved' ? edge.bend : 0;
   const controlX = (startX + endX) / 2 - uy * bend;
   const controlY = (startY + endY) / 2 + ux * bend;
@@ -187,6 +286,32 @@ function pointOnQuadratic(geometry: EdgeGeometry, t: number) {
     x: inverse * inverse * geometry.startX + 2 * inverse * t * geometry.controlX + t * t * geometry.endX,
     y: inverse * inverse * geometry.startY + 2 * inverse * t * geometry.controlY + t * t * geometry.endY,
   };
+}
+
+function getEdgeLabelPoint(edge: DiagramEdge, geometry: EdgeGeometry) {
+  const point = edge.shape === 'curved'
+    ? pointOnQuadratic(geometry, 0.5)
+    : { x: (geometry.startX + geometry.endX) / 2, y: (geometry.startY + geometry.endY) / 2 };
+  const chordX = geometry.endX - geometry.startX;
+  const chordY = geometry.endY - geometry.startY;
+  const length = Math.max(1, Math.hypot(chordX, chordY));
+  const side = edge.shape === 'curved' ? Math.sign(edge.bend) || 1 : -1;
+  return {
+    x: point.x - chordY / length * 16 * side,
+    y: point.y + chordX / length * 16 * side,
+  };
+}
+
+function pointInPolygon(point: { x: number; y: number }, polygon: { x: number; y: number }[]) {
+  let inside = false;
+  for (let current = 0, previous = polygon.length - 1; current < polygon.length; previous = current, current += 1) {
+    const currentPoint = polygon[current];
+    const previousPoint = polygon[previous];
+    const crosses = (currentPoint.y > point.y) !== (previousPoint.y > point.y)
+      && point.x < (previousPoint.x - currentPoint.x) * (point.y - currentPoint.y) / (previousPoint.y - currentPoint.y) + currentPoint.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
 }
 
 function getGraphBounds(graph: Graph) {
@@ -272,8 +397,10 @@ export default function Home() {
   const [graph, setGraph] = useState<Graph>(initialGraph);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const [tool, setTool] = useState<'select' | 'connect'>('select');
+  const [multiSelectedIds, setMultiSelectedIds] = useState<string[]>([]);
+  const [tool, setTool] = useState<CanvasTool>('select');
   const [connectFrom, setConnectFrom] = useState<string | null>(null);
+  const [selectionDraft, setSelectionDraft] = useState<SelectionDraft | null>(null);
   const [transform, setTransform] = useState<Transform>({ x: 20, y: 15, zoom: 0.82 });
   const [hydrated, setHydrated] = useState(false);
   const [savedAt, setSavedAt] = useState('準備中');
@@ -287,11 +414,13 @@ export default function Home() {
   const [googleError, setGoogleError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<Graph>(initialGraph);
+  const selectionDraftRef = useRef<SelectionDraft | null>(null);
   const pastRef = useRef<Graph[]>([]);
   const futureRef = useRef<Graph[]>([]);
   const dragRef = useRef<null | {
-    kind: 'node' | 'pan' | 'curve';
+    kind: 'node' | 'pan' | 'curve' | 'endpoint' | 'marquee' | 'lasso';
     id?: string;
+    endpoint?: 'from' | 'to';
     startX: number;
     startY: number;
     originX: number;
@@ -302,6 +431,12 @@ export default function Home() {
 
   const selectedNode = graph.nodes.find((node) => node.id === selectedNodeId) ?? null;
   const selectedEdge = graph.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
+  const multiSelectedNodes = graph.nodes.filter((node) => multiSelectedIds.includes(node.id));
+
+  const updateSelectionDraft = (draft: SelectionDraft | null) => {
+    selectionDraftRef.current = draft;
+    setSelectionDraft(draft);
+  };
 
   const stats = useMemo(() => {
     const scores = graph.nodes.map((node) => {
@@ -341,6 +476,9 @@ export default function Home() {
     setGraph(graphRef.current);
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
+    setMultiSelectedIds([]);
+    selectionDraftRef.current = null;
+    setSelectionDraft(null);
     setConnectFrom(null);
     setTool('select');
     setHistoryState({ canUndo: pastRef.current.length > 0, canRedo: true });
@@ -355,10 +493,22 @@ export default function Home() {
     setGraph(graphRef.current);
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
+    setMultiSelectedIds([]);
+    selectionDraftRef.current = null;
+    setSelectionDraft(null);
     setHistoryState({ canUndo: true, canRedo: futureRef.current.length > 0 });
   }, []);
 
   const deleteSelection = useCallback(() => {
+    if (multiSelectedIds.length > 0) {
+      const selected = new Set(multiSelectedIds);
+      commit((current) => ({
+        nodes: current.nodes.filter((node) => !selected.has(node.id)),
+        edges: current.edges.filter((edge) => !selected.has(edge.from) && !selected.has(edge.to)),
+      }));
+      setMultiSelectedIds([]);
+      return;
+    }
     if (selectedNodeId) {
       commit((current) => ({
         nodes: current.nodes.filter((node) => node.id !== selectedNodeId),
@@ -372,7 +522,7 @@ export default function Home() {
       commit((current) => ({ ...current, edges: current.edges.filter((edge) => edge.id !== selectedEdgeId) }));
       setSelectedEdgeId(null);
     }
-  }, [commit, selectedEdgeId, selectedNodeId]);
+  }, [commit, multiSelectedIds, selectedEdgeId, selectedNodeId]);
 
   useEffect(() => {
     let storedGraph: Graph | null = null;
@@ -423,7 +573,7 @@ export default function Home() {
         event.preventDefault();
         redo();
       } else if (event.key === 'Delete' || event.key === 'Backspace') {
-        if (selectedNodeId || selectedEdgeId) {
+        if (selectedNodeId || selectedEdgeId || multiSelectedIds.length > 0) {
           event.preventDefault();
           deleteSelection();
         }
@@ -431,11 +581,14 @@ export default function Home() {
         setTool('select');
         setConnectFrom(null);
         setSelectedEdgeId(null);
+        setMultiSelectedIds([]);
+        selectionDraftRef.current = null;
+        setSelectionDraft(null);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [deleteSelection, redo, selectedEdgeId, selectedNodeId, undo]);
+  }, [deleteSelection, multiSelectedIds.length, redo, selectedEdgeId, selectedNodeId, undo]);
 
   const viewportToWorld = (clientX: number, clientY: number) => {
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -452,12 +605,59 @@ export default function Home() {
       (rect?.left ?? 0) + (rect?.width ?? 900) / 2,
       (rect?.top ?? 0) + (rect?.height ?? 600) / 2,
     );
-    const id = `node-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const id = makeId('node');
     commit((current) => ({
       ...current,
-      nodes: [...current.nodes, { id, label: '新しい要素', x: center.x, y: center.y, tone: 'neutral' }],
+      nodes: [...current.nodes, {
+        id,
+        label: '新しい要素',
+        x: center.x,
+        y: center.y,
+        tone: 'neutral',
+        fillColor: null,
+        textColor: null,
+        fontSize: 13,
+      }],
     }));
     setSelectedNodeId(id);
+    setSelectedEdgeId(null);
+    setMultiSelectedIds([]);
+    setTool('select');
+  };
+
+  const duplicateNodes = (nodeIds: string[], keepRelations: boolean) => {
+    if (nodeIds.length === 0) return;
+    const selected = new Set(nodeIds);
+    const idMap = new Map(nodeIds.map((id) => [id, makeId('node')]));
+    const duplicatedIds = nodeIds.map((id) => idMap.get(id)).filter((id): id is string => Boolean(id));
+    commit((current) => {
+      const duplicatedNodes = current.nodes
+        .filter((node) => selected.has(node.id))
+        .map((node) => ({ ...node, id: idMap.get(node.id) ?? node.id, x: node.x + 38, y: node.y + 38 }));
+      const duplicatedEdges = keepRelations
+        ? current.edges
+          .filter((edge) => selected.has(edge.from) || selected.has(edge.to))
+          .map((edge) => ({
+            ...edge,
+            id: makeId('edge'),
+            from: idMap.get(edge.from) ?? edge.from,
+            to: idMap.get(edge.to) ?? edge.to,
+            fromAnchor: edge.fromAnchor ? { ...edge.fromAnchor } : null,
+            toAnchor: edge.toAnchor ? { ...edge.toAnchor } : null,
+          }))
+        : [];
+      return {
+        nodes: [...current.nodes, ...duplicatedNodes],
+        edges: [...current.edges, ...duplicatedEdges],
+      };
+    });
+    if (duplicatedIds.length === 1) {
+      setSelectedNodeId(duplicatedIds[0]);
+      setMultiSelectedIds([]);
+    } else {
+      setSelectedNodeId(null);
+      setMultiSelectedIds(duplicatedIds);
+    }
     setSelectedEdgeId(null);
     setTool('select');
   };
@@ -466,9 +666,11 @@ export default function Home() {
     setTool((current) => current === 'connect' ? 'select' : 'connect');
     setConnectFrom(null);
     setSelectedEdgeId(null);
+    setMultiSelectedIds([]);
   };
 
   const handleNodeClick = (id: string) => {
+    if (tool === 'marquee' || tool === 'lasso') return;
     if (tool === 'connect') {
       if (!connectFrom) {
         setConnectFrom(id);
@@ -490,6 +692,7 @@ export default function Home() {
     }
     setSelectedNodeId(id);
     setSelectedEdgeId(null);
+    setMultiSelectedIds([]);
   };
 
   const handleNodeDoubleClick = (node: DiagramNode) => {
@@ -508,12 +711,14 @@ export default function Home() {
   };
 
   const handleRelationPointerDown = (event: ReactPointerEvent<HTMLElement>, node: DiagramNode) => {
+    if (tool === 'marquee' || tool === 'lasso') return;
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     setRelationDrag({ from: node.id, x: node.x, y: node.y, targetId: null });
     setSelectedNodeId(node.id);
     setSelectedEdgeId(null);
+    setMultiSelectedIds([]);
     setTool('select');
     setConnectFrom(null);
   };
@@ -559,13 +764,44 @@ export default function Home() {
     };
     setSelectedEdgeId(edge.id);
     setSelectedNodeId(null);
+    setMultiSelectedIds([]);
+    setTool('select');
+    setConnectFrom(null);
+  };
+
+  const handleEndpointPointerDown = (
+    event: ReactPointerEvent<SVGCircleElement>,
+    edge: DiagramEdge,
+    endpoint: 'from' | 'to',
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = {
+      kind: 'endpoint',
+      id: edge.id,
+      endpoint,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: 0,
+      originY: 0,
+      snapshot: cloneGraph(graphRef.current),
+      moved: false,
+    };
+    setSelectedEdgeId(edge.id);
+    setSelectedNodeId(null);
+    setMultiSelectedIds([]);
     setTool('select');
     setConnectFrom(null);
   };
 
   const handleNodePointerDown = (event: ReactPointerEvent<HTMLButtonElement>, node: DiagramNode) => {
+    if (tool === 'connect') {
+      event.stopPropagation();
+      return;
+    }
+    if (tool === 'marquee' || tool === 'lasso') return;
     event.stopPropagation();
-    if (tool === 'connect') return;
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
       kind: 'node',
@@ -579,12 +815,35 @@ export default function Home() {
     };
     setSelectedNodeId(node.id);
     setSelectedEdgeId(null);
+    setMultiSelectedIds([]);
   };
 
   const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (tool === 'marquee' || tool === 'lasso') {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      const point = viewportToWorld(event.clientX, event.clientY);
+      const draft: SelectionDraft = tool === 'marquee'
+        ? { kind: 'marquee', start: point, current: point }
+        : { kind: 'lasso', points: [point] };
+      updateSelectionDraft(draft);
+      setSelectedNodeId(null);
+      setSelectedEdgeId(null);
+      setMultiSelectedIds([]);
+      dragRef.current = {
+        kind: tool,
+        startX: event.clientX,
+        startY: event.clientY,
+        originX: 0,
+        originY: 0,
+        moved: false,
+      };
+      return;
+    }
     if ((event.target as Element).closest('.diagram-node, .edge-hit')) return;
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
+    setMultiSelectedIds([]);
     if (tool === 'connect') {
       setConnectFrom(null);
       return;
@@ -608,6 +867,35 @@ export default function Home() {
     if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
     if (drag.kind === 'pan') {
       setTransform((current) => ({ ...current, x: drag.originX + dx, y: drag.originY + dy }));
+    } else if (drag.kind === 'marquee') {
+      const draft = selectionDraftRef.current;
+      if (draft?.kind !== 'marquee') return;
+      updateSelectionDraft({ ...draft, current: viewportToWorld(event.clientX, event.clientY) });
+    } else if (drag.kind === 'lasso') {
+      const draft = selectionDraftRef.current;
+      if (draft?.kind !== 'lasso') return;
+      const point = viewportToWorld(event.clientX, event.clientY);
+      const previous = draft.points.at(-1);
+      if (!previous || Math.hypot(point.x - previous.x, point.y - previous.y) >= 7 / transform.zoom) {
+        updateSelectionDraft({ ...draft, points: [...draft.points, point] });
+      }
+    } else if (drag.kind === 'endpoint' && drag.id && drag.endpoint) {
+      const edge = graphRef.current.edges.find((item) => item.id === drag.id);
+      if (!edge) return;
+      const nodeId = drag.endpoint === 'from' ? edge.from : edge.to;
+      const node = graphRef.current.nodes.find((item) => item.id === nodeId);
+      if (!node) return;
+      const anchor = snapPointToNode(node, viewportToWorld(event.clientX, event.clientY));
+      setGraph((current) => {
+        const next = {
+          ...current,
+          edges: current.edges.map((item) => item.id === drag.id
+            ? { ...item, [drag.endpoint === 'from' ? 'fromAnchor' : 'toAnchor']: anchor }
+            : item),
+        };
+        graphRef.current = next;
+        return next;
+      });
     } else if (drag.kind === 'curve' && drag.id) {
       const edge = graphRef.current.edges.find((item) => item.id === drag.id);
       const geometry = edge ? getEdgeGeometry(edge, graphRef.current.nodes) : null;
@@ -645,7 +933,25 @@ export default function Home() {
 
   const handlePointerUp = () => {
     const drag = dragRef.current;
-    if ((drag?.kind === 'node' || drag?.kind === 'curve') && drag.moved && drag.snapshot) pushPast(drag.snapshot);
+    if (drag?.kind === 'marquee' || drag?.kind === 'lasso') {
+      const draft = selectionDraftRef.current;
+      const selectedIds = draft?.kind === 'marquee'
+        ? graphRef.current.nodes.filter((node) => {
+          const minX = Math.min(draft.start.x, draft.current.x);
+          const maxX = Math.max(draft.start.x, draft.current.x);
+          const minY = Math.min(draft.start.y, draft.current.y);
+          const maxY = Math.max(draft.start.y, draft.current.y);
+          return node.x >= minX && node.x <= maxX && node.y >= minY && node.y <= maxY;
+        }).map((node) => node.id)
+        : draft?.kind === 'lasso' && draft.points.length >= 3
+          ? graphRef.current.nodes.filter((node) => pointInPolygon(node, draft.points)).map((node) => node.id)
+          : [];
+      setMultiSelectedIds(selectedIds);
+      updateSelectionDraft(null);
+      dragRef.current = null;
+      return;
+    }
+    if ((drag?.kind === 'node' || drag?.kind === 'curve' || drag?.kind === 'endpoint') && drag.moved && drag.snapshot) pushPast(drag.snapshot);
     dragRef.current = null;
   };
 
@@ -767,8 +1073,29 @@ export default function Home() {
       if (hasEndArrow(edge.direction)) drawArrow(geometry.endX, geometry.endY, endAngle);
     });
 
+    graph.edges.forEach((edge) => {
+      const label = edge.label.trim();
+      const geometry = getEdgeGeometry(edge, graph.nodes);
+      if (!label || !geometry) return;
+      const point = getEdgeLabelPoint(edge, geometry);
+      context.font = '600 13px system-ui, sans-serif';
+      const width = Math.max(52, Math.min(260, context.measureText(label).width + 22));
+      const height = 28;
+      context.beginPath();
+      context.roundRect(point.x - width / 2, point.y - height / 2, width, height, 8);
+      context.fillStyle = 'rgba(255, 255, 255, .96)';
+      context.fill();
+      context.lineWidth = 1;
+      context.strokeStyle = '#dce3df';
+      context.stroke();
+      context.fillStyle = '#46524f';
+      context.textAlign = 'center';
+      context.textBaseline = 'middle';
+      context.fillText(label, point.x, point.y + 0.5, width - 16);
+    });
+
     graph.nodes.forEach((node) => {
-      const colors = toneColors[node.tone];
+      const colors = getNodeColors(node);
       const width = node.tone === 'theme' ? 188 : NODE_WIDTH;
       const height = node.tone === 'theme' ? 96 : NODE_HEIGHT;
       const x = node.x - width / 2;
@@ -781,7 +1108,7 @@ export default function Home() {
       context.strokeStyle = colors.stroke;
       context.stroke();
       context.fillStyle = colors.text;
-      context.font = `600 ${node.tone === 'theme' ? 15 : 14}px system-ui, sans-serif`;
+      context.font = `600 ${node.fontSize}px system-ui, sans-serif`;
       context.textAlign = 'center';
       context.textBaseline = 'middle';
       const lines = wrapCanvasText(context, node.label, width - 28);
@@ -906,8 +1233,35 @@ export default function Home() {
       }
     });
 
+    graph.edges.forEach((edge) => {
+      const label = edge.label.trim();
+      const geometry = getEdgeGeometry(edge, graph.nodes);
+      if (!label || !geometry) return;
+      const center = toSlide(getEdgeLabelPoint(edge, geometry));
+      const width = Math.max(0.8, Math.min(2.6, label.length * 0.12 + 0.42));
+      const height = 0.34;
+      slide.addText(label, {
+        x: center.x - width / 2,
+        y: center.y - height / 2,
+        w: width,
+        h: height,
+        shape: pptx.ShapeType.roundRect,
+        fill: { color: 'FFFFFF', transparency: 4 },
+        line: { color: 'DCE3DF', width: 0.7 },
+        color: '46524F',
+        fontFace: 'Yu Gothic',
+        fontSize: 10,
+        bold: true,
+        align: 'center',
+        valign: 'middle',
+        margin: 0.04,
+        breakLine: false,
+        fit: 'shrink',
+      });
+    });
+
     graph.nodes.forEach((node) => {
-      const colors = toneColors[node.tone];
+      const colors = getNodeColors(node);
       const width = (node.tone === 'theme' ? 188 : NODE_WIDTH) * scale;
       const height = (node.tone === 'theme' ? 96 : NODE_HEIGHT) * scale;
       const center = toSlide(node);
@@ -921,7 +1275,7 @@ export default function Home() {
         line: { color: colors.stroke.slice(1), width: node.tone === 'theme' ? 1.8 : 1 },
         color: colors.text.slice(1),
         fontFace: 'Yu Gothic',
-        fontSize: Math.max(9, Math.min(15, 14 * scale / 0.012)),
+        fontSize: Math.max(8, Math.min(24, node.fontSize * scale / 0.012)),
         bold: true,
         align: 'center',
         valign: 'middle',
@@ -1052,10 +1406,12 @@ export default function Home() {
     commit(() => cloneGraph(initialGraph));
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
+    setMultiSelectedIds([]);
+    updateSelectionDraft(null);
     setTransform({ x: 20, y: 15, zoom: 0.82 });
   };
 
-  const updateSelectedNode = (patch: Partial<Pick<DiagramNode, 'label' | 'tone'>>) => {
+  const updateSelectedNode = (patch: Partial<Pick<DiagramNode, 'label' | 'tone' | 'fillColor' | 'textColor' | 'fontSize'>>) => {
     if (!selectedNodeId) return;
     commit((current) => ({
       ...current,
@@ -1063,7 +1419,16 @@ export default function Home() {
     }));
   };
 
-  const updateSelectedEdge = (patch: Partial<Pick<DiagramEdge, 'direction' | 'shape' | 'lineStyle' | 'bend'>>) => {
+  const updateMultiSelectedNodes = (patch: Partial<Pick<DiagramNode, 'fillColor' | 'textColor' | 'fontSize'>>) => {
+    if (multiSelectedIds.length === 0) return;
+    const selected = new Set(multiSelectedIds);
+    commit((current) => ({
+      ...current,
+      nodes: current.nodes.map((node) => selected.has(node.id) ? { ...node, ...patch } : node),
+    }));
+  };
+
+  const updateSelectedEdge = (patch: Partial<Pick<DiagramEdge, 'label' | 'direction' | 'shape' | 'lineStyle' | 'bend' | 'fromAnchor' | 'toAnchor'>>) => {
     if (!selectedEdgeId) return;
     commit((current) => ({
       ...current,
@@ -1073,8 +1438,8 @@ export default function Home() {
 
   const fromNode = selectedEdge ? graph.nodes.find((node) => node.id === selectedEdge.from) : null;
   const toNode = selectedEdge ? graph.nodes.find((node) => node.id === selectedEdge.to) : null;
-  const selectedEdgeGeometry = selectedEdge?.shape === 'curved' ? getEdgeGeometry(selectedEdge, graph.nodes) : null;
-  const curveHandlePoint = selectedEdgeGeometry ? pointOnQuadratic(selectedEdgeGeometry, 0.5) : null;
+  const selectedEdgeGeometry = selectedEdge ? getEdgeGeometry(selectedEdge, graph.nodes) : null;
+  const curveHandlePoint = selectedEdge?.shape === 'curved' && selectedEdgeGeometry ? pointOnQuadratic(selectedEdgeGeometry, 0.5) : null;
 
   return (
     <main className="app-shell">
@@ -1094,7 +1459,31 @@ export default function Home() {
             <button className={`secondary-button ${tool === 'connect' ? 'active' : ''}`} type="button" onClick={startConnecting}>↗ 関係をつなぐ</button>
           </div>
 
-          {selectedNode ? (
+          {multiSelectedNodes.length > 0 ? (
+            <div className="panel-section inspector">
+              <div className="section-heading"><p className="panel-label">複数選択</p><span>{multiSelectedNodes.length} 要素</span></div>
+              <p className="field-label">背景色を一括変更</p>
+              <div className="color-palette">
+                {NODE_PALETTE.map((color) => (
+                  <button key={color} type="button" title={color} style={{ backgroundColor: color }} onClick={() => updateMultiSelectedNodes({ fillColor: color })} />
+                ))}
+                <label className="custom-color" title="自由な色を選択">
+                  <input type="color" defaultValue="#e3eee9" onChange={(event) => updateMultiSelectedNodes({ fillColor: event.target.value })} />
+                  <span>＋</span>
+                </label>
+              </div>
+              <div className="font-size-control">
+                <label className="field-label" htmlFor="multi-font-size">文字サイズ</label>
+                <input id="multi-font-size" type="range" min="9" max="28" defaultValue="13" onChange={(event) => updateMultiSelectedNodes({ fontSize: Number(event.target.value) })} />
+              </div>
+              <p className="field-label">複製</p>
+              <div className="duplicate-actions">
+                <button type="button" onClick={() => duplicateNodes(multiSelectedIds, false)}>要素だけ</button>
+                <button type="button" onClick={() => duplicateNodes(multiSelectedIds, true)}>関係ごと</button>
+              </div>
+              <button className="danger-button" type="button" onClick={deleteSelection}>{multiSelectedNodes.length}要素を削除</button>
+            </div>
+          ) : selectedNode ? (
             <div className="panel-section inspector">
               <div className="section-heading"><p className="panel-label">選択中の要素</p><span>{toneNames[selectedNode.tone]}</span></div>
               <label className="field-label" htmlFor="node-label">内容</label>
@@ -1106,6 +1495,36 @@ export default function Home() {
                     <i className={tone} />{toneNames[tone]}
                   </button>
                 ))}
+              </div>
+              <p className="field-label">背景色</p>
+              <div className="color-palette">
+                {NODE_PALETTE.map((color) => (
+                  <button
+                    key={color}
+                    className={(selectedNode.fillColor ?? toneColors[selectedNode.tone].fill).toLowerCase() === color.toLowerCase() ? 'selected' : ''}
+                    type="button"
+                    title={color}
+                    style={{ backgroundColor: color }}
+                    onClick={() => updateSelectedNode({ fillColor: color })}
+                  />
+                ))}
+                <label className="custom-color" title="自由な色を選択">
+                  <input type="color" value={selectedNode.fillColor ?? toneColors[selectedNode.tone].fill} onChange={(event) => updateSelectedNode({ fillColor: event.target.value })} />
+                  <span>＋</span>
+                </label>
+              </div>
+              <div className="style-control-row">
+                <label>文字色<input type="color" value={selectedNode.textColor ?? getNodeColors(selectedNode).text} onChange={(event) => updateSelectedNode({ textColor: event.target.value })} /></label>
+                <button type="button" onClick={() => updateSelectedNode({ fillColor: null, textColor: null })}>配色を戻す</button>
+              </div>
+              <div className="font-size-control">
+                <label className="field-label" htmlFor="node-font-size">文字サイズ <strong>{selectedNode.fontSize}px</strong></label>
+                <input id="node-font-size" type="range" min="9" max="28" value={selectedNode.fontSize} onChange={(event) => updateSelectedNode({ fontSize: Number(event.target.value) })} />
+              </div>
+              <p className="field-label">複製</p>
+              <div className="duplicate-actions">
+                <button type="button" onClick={() => duplicateNodes([selectedNode.id], false)}>要素だけ</button>
+                <button type="button" onClick={() => duplicateNodes([selectedNode.id], true)}>関係ごと</button>
               </div>
               <div className="node-degree">
                 <span>入ってくる矢印 <strong>{graph.edges.reduce((count, edge) => count + (edge.to === selectedNode.id && hasEndArrow(edge.direction) ? 1 : 0) + (edge.from === selectedNode.id && hasStartArrow(edge.direction) ? 1 : 0), 0)}</strong></span>
@@ -1120,6 +1539,18 @@ export default function Home() {
                 <strong>{fromNode?.label.replaceAll('\n', ' ')}</strong>
                 <span>{directionNames[selectedEdge.direction]}</span>
                 <strong>{toNode?.label.replaceAll('\n', ' ')}</strong>
+              </div>
+              <label className="field-label" htmlFor="edge-label">ラベル</label>
+              <input
+                id="edge-label"
+                value={selectedEdge.label}
+                onChange={(event) => updateSelectedEdge({ label: event.target.value })}
+                placeholder="関係の説明（任意）"
+                maxLength={50}
+              />
+              <div className="anchor-help">
+                <span>図上の両端の丸をドラッグして接点を移動</span>
+                <button type="button" onClick={() => updateSelectedEdge({ fromAnchor: null, toAnchor: null })}>自動に戻す</button>
               </div>
               <p className="field-label">形状</p>
               <div className="edge-option-grid two-columns">
@@ -1172,7 +1603,13 @@ export default function Home() {
 
           <div className="tip-card">
             <span className="tip-mark">?</span>
-            <p>{tool === 'connect' ? (connectFrom ? '次に、矢印の行き先を選びます。' : '矢印の出発点になる要素を選びます。') : '要素右端の＋を別の要素へドラッグすると、関係を直接追加できます。'}</p>
+            <p>{tool === 'connect'
+              ? (connectFrom ? '次に、矢印の行き先を選びます。' : '矢印の出発点になる要素を選びます。')
+              : tool === 'marquee'
+                ? 'ドラッグした長方形の中にある要素をまとめて選択します。'
+                : tool === 'lasso'
+                  ? 'フリーハンドで囲んだ要素をまとめて選択します。'
+                  : '要素右端の＋を別の要素へドラッグすると、関係を直接追加できます。'}</p>
           </div>
           <button className="reset-button" type="button" onClick={resetGraph}>最初の例に戻す</button>
           <button className="reset-button google-settings-button" type="button" onClick={openGoogleSetup}>Google連携を設定</button>
@@ -1184,11 +1621,16 @@ export default function Home() {
               <button type="button" onClick={() => addNode()} aria-label="要素を追加">＋ <span>要素</span></button>
               <button type="button" className={tool === 'connect' ? 'active' : ''} onClick={startConnecting}>↗ <span>接続</span></button>
             </div>
+            <div className="toolbar-group selection-tools" aria-label="キャンバス操作モード">
+              <button type="button" className={tool === 'select' ? 'active' : ''} title="背景をドラッグして移動" onClick={() => { setTool('select'); setConnectFrom(null); updateSelectionDraft(null); }}>✋ <span>移動</span></button>
+              <button type="button" className={tool === 'marquee' ? 'active' : ''} title="長方形で複数選択" onClick={() => { setTool('marquee'); setConnectFrom(null); setSelectedNodeId(null); setSelectedEdgeId(null); setMultiSelectedIds([]); updateSelectionDraft(null); }}>▭ <span>範囲</span></button>
+              <button type="button" className={tool === 'lasso' ? 'active' : ''} title="フリーハンドで複数選択" onClick={() => { setTool('lasso'); setConnectFrom(null); setSelectedNodeId(null); setSelectedEdgeId(null); setMultiSelectedIds([]); updateSelectionDraft(null); }}>⌁ <span>自由</span></button>
+            </div>
             <div className="toolbar-spacer" />
             <div className="toolbar-group">
               <button type="button" onClick={undo} disabled={!historyState.canUndo} aria-label="元に戻す">↶</button>
               <button type="button" onClick={redo} disabled={!historyState.canRedo} aria-label="やり直す">↷</button>
-              <button type="button" onClick={deleteSelection} disabled={!selectedNodeId && !selectedEdgeId} aria-label="選択項目を削除">⌫</button>
+              <button type="button" onClick={deleteSelection} disabled={!selectedNodeId && !selectedEdgeId && multiSelectedIds.length === 0} aria-label="選択項目を削除">⌫</button>
             </div>
             <div className="toolbar-divider" />
             <button type="button" onClick={fitView}>全体表示</button>
@@ -1199,10 +1641,10 @@ export default function Home() {
           </div>
 
           <div
-            className={`diagram-canvas ${tool === 'connect' ? 'connecting' : ''}`}
+            className={`diagram-canvas ${tool === 'connect' ? 'connecting' : ''} ${tool === 'marquee' || tool === 'lasso' ? 'selecting' : ''}`}
             ref={canvasRef}
             onDoubleClick={(event) => {
-              if (!(event.target as Element).closest('.diagram-node, .edge-hit')) addNode(viewportToWorld(event.clientX, event.clientY));
+              if (tool === 'select' && !(event.target as Element).closest('.diagram-node, .edge-hit')) addNode(viewportToWorld(event.clientX, event.clientY));
             }}
             onPointerDown={handleCanvasPointerDown}
             onPointerMove={handlePointerMove}
@@ -1228,7 +1670,29 @@ export default function Home() {
                   const markerEnd = hasEndArrow(edge.direction) ? 'url(#arrow)' : undefined;
                   return (
                     <g key={edge.id} className={selected ? 'selected' : ''}>
-                      <path className="edge-hit" d={path} onClick={(event) => { event.stopPropagation(); setSelectedEdgeId(edge.id); setSelectedNodeId(null); setTool('select'); setConnectFrom(null); }} />
+                      <path
+                        className="edge-hit"
+                        d={path}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          if (tool === 'marquee' || tool === 'lasso') return;
+                          setSelectedEdgeId(edge.id);
+                          setSelectedNodeId(null);
+                          setMultiSelectedIds([]);
+                          setTool('select');
+                          setConnectFrom(null);
+                        }}
+                        onDoubleClick={(event) => {
+                          event.stopPropagation();
+                          if (tool === 'marquee' || tool === 'lasso') return;
+                          const label = window.prompt('関係のラベルを入力してください', edge.label);
+                          if (label === null) return;
+                          commit((current) => ({
+                            ...current,
+                            edges: current.edges.map((item) => item.id === edge.id ? { ...item, label: label.trim() } : item),
+                          }));
+                        }}
+                      />
                       {edge.lineStyle === 'double' ? (
                         <>
                           <path className="edge-line edge-double-outer" d={path} markerStart={markerStart} markerEnd={markerEnd} />
@@ -1238,6 +1702,17 @@ export default function Home() {
                         <path className={`edge-line ${edge.lineStyle}`} d={path} markerStart={markerStart} markerEnd={markerEnd} />
                       )}
                     </g>
+                  );
+                })}
+                {graph.edges.map((edge) => {
+                  const geometry = getEdgeGeometry(edge, graph.nodes);
+                  const label = edge.label.trim();
+                  if (!geometry || !label) return null;
+                  const point = getEdgeLabelPoint(edge, geometry);
+                  return (
+                    <foreignObject key={`label-${edge.id}`} className="edge-label" x={point.x - 90} y={point.y - 17} width="180" height="34">
+                      <div title={label}>{label}</div>
+                    </foreignObject>
                   );
                 })}
                 {selectedEdge && selectedEdgeGeometry && curveHandlePoint && (
@@ -1270,39 +1745,87 @@ export default function Home() {
                     />
                   </g>
                 )}
+                {selectedEdge && selectedEdgeGeometry && (
+                  <g className="endpoint-controls">
+                    <circle
+                      className="endpoint-control from"
+                      cx={selectedEdgeGeometry.startX}
+                      cy={selectedEdgeGeometry.startY}
+                      r="8"
+                      role="slider"
+                      tabIndex={0}
+                      aria-label="始点側の接点"
+                      onPointerDown={(event) => handleEndpointPointerDown(event, selectedEdge, 'from')}
+                      onPointerMove={handlePointerMove}
+                      onPointerUp={(event) => { event.stopPropagation(); handlePointerUp(); }}
+                      onPointerCancel={handlePointerUp}
+                    />
+                    <circle
+                      className="endpoint-control to"
+                      cx={selectedEdgeGeometry.endX}
+                      cy={selectedEdgeGeometry.endY}
+                      r="8"
+                      role="slider"
+                      tabIndex={0}
+                      aria-label="終点側の接点"
+                      onPointerDown={(event) => handleEndpointPointerDown(event, selectedEdge, 'to')}
+                      onPointerMove={handlePointerMove}
+                      onPointerUp={(event) => { event.stopPropagation(); handlePointerUp(); }}
+                      onPointerCancel={handlePointerUp}
+                    />
+                  </g>
+                )}
                 {relationDrag && (
                   <path className="edge-preview" d={`M ${graph.nodes.find((node) => node.id === relationDrag.from)?.x ?? relationDrag.x} ${graph.nodes.find((node) => node.id === relationDrag.from)?.y ?? relationDrag.y} L ${relationDrag.x} ${relationDrag.y}`} markerEnd="url(#arrow)" />
                 )}
               </svg>
 
-              {graph.nodes.map((node) => (
-                <button
-                  className={`diagram-node ${node.tone} ${selectedNodeId === node.id ? 'selected' : ''} ${connectFrom === node.id ? 'connect-source' : ''} ${relationDrag?.targetId === node.id && relationDrag.from !== node.id ? 'connect-target' : ''}`}
-                  key={node.id}
-                  data-node-id={node.id}
-                  style={{ left: node.x, top: node.y }}
-                  type="button"
-                  aria-label={`${node.label.replaceAll('\n', ' ')}、${toneNames[node.tone]}`}
-                  onClick={() => handleNodeClick(node.id)}
-                  onDoubleClick={(event) => { event.stopPropagation(); handleNodeDoubleClick(node); }}
-                  onPointerDown={(event) => handleNodePointerDown(event, node)}
-                  onPointerMove={handlePointerMove}
-                  onPointerUp={handlePointerUp}
-                  onPointerCancel={handlePointerUp}
-                >
-                  {node.label.split('\n').map((line, index) => <span key={`${line}-${index}`}>{line || ' '}</span>)}
-                  <span
-                    className="connection-handle"
-                    title="別の要素へドラッグして関係を追加"
-                    aria-hidden="true"
-                    onClick={(event) => event.stopPropagation()}
-                    onPointerDown={(event) => handleRelationPointerDown(event, node)}
-                    onPointerMove={handleRelationPointerMove}
-                    onPointerUp={handleRelationPointerUp}
-                    onPointerCancel={() => setRelationDrag(null)}
-                  >＋</span>
-                </button>
-              ))}
+              {graph.nodes.map((node) => {
+                const colors = getNodeColors(node);
+                return (
+                  <button
+                    className={`diagram-node ${node.tone} ${selectedNodeId === node.id ? 'selected' : ''} ${multiSelectedIds.includes(node.id) ? 'multi-selected' : ''} ${connectFrom === node.id ? 'connect-source' : ''} ${relationDrag?.targetId === node.id && relationDrag.from !== node.id ? 'connect-target' : ''}`}
+                    key={node.id}
+                    data-node-id={node.id}
+                    style={{ left: node.x, top: node.y, backgroundColor: colors.fill, borderColor: colors.stroke, color: colors.text, fontSize: node.fontSize }}
+                    type="button"
+                    aria-label={`${node.label.replaceAll('\n', ' ')}、${toneNames[node.tone]}`}
+                    onClick={() => handleNodeClick(node.id)}
+                    onDoubleClick={(event) => { event.stopPropagation(); if (tool !== 'marquee' && tool !== 'lasso') handleNodeDoubleClick(node); }}
+                    onPointerDown={(event) => handleNodePointerDown(event, node)}
+                    onPointerMove={handlePointerMove}
+                    onPointerUp={handlePointerUp}
+                    onPointerCancel={handlePointerUp}
+                  >
+                    {node.label.split('\n').map((line, index) => <span key={`${line}-${index}`}>{line || ' '}</span>)}
+                    <span
+                      className="connection-handle"
+                      title="別の要素へドラッグして関係を追加"
+                      aria-hidden="true"
+                      onClick={(event) => event.stopPropagation()}
+                      onPointerDown={(event) => handleRelationPointerDown(event, node)}
+                      onPointerMove={handleRelationPointerMove}
+                      onPointerUp={handleRelationPointerUp}
+                      onPointerCancel={() => setRelationDrag(null)}
+                    >＋</span>
+                  </button>
+                );
+              })}
+              {selectionDraft?.kind === 'marquee' && (
+                <svg className="selection-overlay" width={WORLD_WIDTH} height={WORLD_HEIGHT} aria-hidden="true">
+                  <rect
+                    x={Math.min(selectionDraft.start.x, selectionDraft.current.x)}
+                    y={Math.min(selectionDraft.start.y, selectionDraft.current.y)}
+                    width={Math.abs(selectionDraft.current.x - selectionDraft.start.x)}
+                    height={Math.abs(selectionDraft.current.y - selectionDraft.start.y)}
+                  />
+                </svg>
+              )}
+              {selectionDraft?.kind === 'lasso' && selectionDraft.points.length > 0 && (
+                <svg className="selection-overlay" width={WORLD_WIDTH} height={WORLD_HEIGHT} aria-hidden="true">
+                  <path d={`${selectionDraft.points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')} Z`} />
+                </svg>
+              )}
             </div>
 
             {graph.nodes.length === 0 ? (
@@ -1316,6 +1839,9 @@ export default function Home() {
 
             {tool === 'connect' && (
               <div className="mode-banner"><span />{connectFrom ? '行き先の要素を選択' : '出発点の要素を選択'}<button type="button" onClick={() => { setTool('select'); setConnectFrom(null); }}>終了</button></div>
+            )}
+            {(tool === 'marquee' || tool === 'lasso') && (
+              <div className="mode-banner" onPointerDown={(event) => event.stopPropagation()}><span />{tool === 'marquee' ? '長方形で複数選択' : 'フリーハンドで複数選択'}<button type="button" onClick={() => { setTool('select'); updateSelectionDraft(null); }}>終了</button></div>
             )}
 
             {(googleSlidesUrl || googleError) && (
