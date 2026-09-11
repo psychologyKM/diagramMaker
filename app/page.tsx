@@ -15,6 +15,7 @@ type DiagramEdge = {
   direction: EdgeDirection;
   shape: EdgeShape;
   lineStyle: EdgeLineStyle;
+  bend: number;
 };
 type Graph = { nodes: DiagramNode[]; edges: DiagramEdge[] };
 type Transform = { x: number; y: number; zoom: number };
@@ -26,8 +27,23 @@ type EdgeGeometry = {
   controlX: number;
   controlY: number;
 };
+type GoogleTokenResponse = { access_token?: string; error?: string; error_description?: string };
+type GoogleIdentity = {
+  accounts: {
+    oauth2: {
+      initTokenClient: (config: {
+        client_id: string;
+        scope: string;
+        callback: (response: GoogleTokenResponse) => void;
+        error_callback?: (error: { type?: string }) => void;
+      }) => { requestAccessToken: (options?: { prompt?: string }) => void };
+    };
+  };
+};
 
 const STORAGE_KEY = 'relation-map-v1';
+const GOOGLE_CLIENT_ID_KEY = 'relation-map-google-client-id';
+const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const NODE_WIDTH = 176;
 const NODE_HEIGHT = 86;
 const WORLD_WIDTH = 2200;
@@ -42,11 +58,11 @@ const initialGraph: Graph = {
     { id: 'delay', label: '判断が\n遅れる', x: 1080, y: 550, tone: 'result' },
   ],
   edges: [
-    { id: 'e1', from: 'meeting', to: 'theme', direction: 'forward', shape: 'straight', lineStyle: 'solid' },
-    { id: 'e2', from: 'updates', to: 'theme', direction: 'forward', shape: 'curved', lineStyle: 'solid' },
-    { id: 'e3', from: 'theme', to: 'owner', direction: 'forward', shape: 'straight', lineStyle: 'solid' },
-    { id: 'e4', from: 'theme', to: 'delay', direction: 'forward', shape: 'curved', lineStyle: 'dashed' },
-    { id: 'e5', from: 'meeting', to: 'owner', direction: 'both', shape: 'curved', lineStyle: 'dotted' },
+    { id: 'e1', from: 'meeting', to: 'theme', direction: 'forward', shape: 'straight', lineStyle: 'solid', bend: 58 },
+    { id: 'e2', from: 'updates', to: 'theme', direction: 'forward', shape: 'curved', lineStyle: 'solid', bend: -92 },
+    { id: 'e3', from: 'theme', to: 'owner', direction: 'forward', shape: 'straight', lineStyle: 'solid', bend: 58 },
+    { id: 'e4', from: 'theme', to: 'delay', direction: 'forward', shape: 'curved', lineStyle: 'dashed', bend: 84 },
+    { id: 'e5', from: 'meeting', to: 'owner', direction: 'both', shape: 'curved', lineStyle: 'dotted', bend: 118 },
   ],
 };
 
@@ -110,6 +126,7 @@ function normalizeGraph(value: Graph): Graph {
       direction: isEdgeDirection(edge.direction) ? edge.direction : 'forward',
       shape: isEdgeShape(edge.shape) ? edge.shape : 'curved',
       lineStyle: isEdgeLineStyle(edge.lineStyle) ? edge.lineStyle : 'solid',
+      bend: Number.isFinite(edge.bend) ? Math.max(-700, Math.min(700, edge.bend)) : 58,
     })),
   };
 }
@@ -122,6 +139,7 @@ function makeEdge(from: string, to: string): DiagramEdge {
     direction: 'forward',
     shape: 'straight',
     lineStyle: 'solid',
+    bend: 58,
   };
 }
 
@@ -141,7 +159,7 @@ function getEdgeGeometry(edge: DiagramEdge, nodes: DiagramNode[]): EdgeGeometry 
   const startY = source.y + uy * sourceOffset;
   const endX = target.x - ux * targetOffset;
   const endY = target.y - uy * targetOffset;
-  const bend = edge.shape === 'curved' ? 58 : 0;
+  const bend = edge.shape === 'curved' ? edge.bend : 0;
   const controlX = (startX + endX) / 2 - uy * bend;
   const controlY = (startY + endY) / 2 + ux * bend;
   return { startX, startY, endX, endY, controlX, controlY };
@@ -169,6 +187,62 @@ function pointOnQuadratic(geometry: EdgeGeometry, t: number) {
     x: inverse * inverse * geometry.startX + 2 * inverse * t * geometry.controlX + t * t * geometry.endX,
     y: inverse * inverse * geometry.startY + 2 * inverse * t * geometry.controlY + t * t * geometry.endY,
   };
+}
+
+function getGraphBounds(graph: Graph) {
+  const xs: number[] = [];
+  const ys: number[] = [];
+  graph.nodes.forEach((node) => {
+    const width = node.tone === 'theme' ? 188 : NODE_WIDTH;
+    const height = node.tone === 'theme' ? 96 : NODE_HEIGHT;
+    xs.push(node.x - width / 2, node.x + width / 2);
+    ys.push(node.y - height / 2, node.y + height / 2);
+  });
+  graph.edges.forEach((edge) => {
+    if (edge.shape !== 'curved') return;
+    const geometry = getEdgeGeometry(edge, graph.nodes);
+    if (!geometry) return;
+    xs.push(geometry.controlX);
+    ys.push(geometry.controlY);
+  });
+  return {
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys),
+  };
+}
+
+let googleIdentityPromise: Promise<GoogleIdentity> | null = null;
+
+function loadGoogleIdentity() {
+  const googleWindow = window as Window & { google?: GoogleIdentity };
+  if (googleWindow.google) return Promise.resolve(googleWindow.google);
+  if (googleIdentityPromise) return googleIdentityPromise;
+  googleIdentityPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>('script[data-google-identity]');
+    const script = existing ?? document.createElement('script');
+    const fail = () => {
+      googleIdentityPromise = null;
+      script.remove();
+      reject(new Error('Google Identity Servicesを読み込めませんでした。'));
+    };
+    const onLoad = () => {
+      const identity = (window as Window & { google?: GoogleIdentity }).google;
+      if (identity) resolve(identity);
+      else fail();
+    };
+    script.addEventListener('load', onLoad, { once: true });
+    script.addEventListener('error', fail, { once: true });
+    if (!existing) {
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      script.defer = true;
+      script.dataset.googleIdentity = 'true';
+      document.head.appendChild(script);
+    }
+  });
+  return googleIdentityPromise;
 }
 
 function wrapCanvasText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
@@ -206,12 +280,17 @@ export default function Home() {
   const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false });
   const [relationDrag, setRelationDrag] = useState<null | { from: string; x: number; y: number; targetId: string | null }>(null);
   const [exportingPptx, setExportingPptx] = useState(false);
+  const [creatingGoogleSlides, setCreatingGoogleSlides] = useState(false);
+  const [googleSetupOpen, setGoogleSetupOpen] = useState(false);
+  const [googleClientIdInput, setGoogleClientIdInput] = useState('');
+  const [googleSlidesUrl, setGoogleSlidesUrl] = useState<string | null>(null);
+  const [googleError, setGoogleError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<Graph>(initialGraph);
   const pastRef = useRef<Graph[]>([]);
   const futureRef = useRef<Graph[]>([]);
   const dragRef = useRef<null | {
-    kind: 'node' | 'pan';
+    kind: 'node' | 'pan' | 'curve';
     id?: string;
     startX: number;
     startY: number;
@@ -316,6 +395,12 @@ export default function Home() {
       setHydrated(true);
     });
     return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    void loadGoogleIdentity().catch(() => {
+      // The Google button retries loading and surfaces an error when used.
+    });
   }, []);
 
   useEffect(() => {
@@ -458,6 +543,26 @@ export default function Home() {
     setRelationDrag(null);
   };
 
+  const handleCurvePointerDown = (event: ReactPointerEvent<SVGCircleElement>, edge: DiagramEdge) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = {
+      kind: 'curve',
+      id: edge.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: 0,
+      originY: 0,
+      snapshot: cloneGraph(graph),
+      moved: false,
+    };
+    setSelectedEdgeId(edge.id);
+    setSelectedNodeId(null);
+    setTool('select');
+    setConnectFrom(null);
+  };
+
   const handleNodePointerDown = (event: ReactPointerEvent<HTMLButtonElement>, node: DiagramNode) => {
     event.stopPropagation();
     if (tool === 'connect') return;
@@ -503,7 +608,28 @@ export default function Home() {
     if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
     if (drag.kind === 'pan') {
       setTransform((current) => ({ ...current, x: drag.originX + dx, y: drag.originY + dy }));
-    } else if (drag.id) {
+    } else if (drag.kind === 'curve' && drag.id) {
+      const edge = graphRef.current.edges.find((item) => item.id === drag.id);
+      const geometry = edge ? getEdgeGeometry(edge, graphRef.current.nodes) : null;
+      if (!edge || !geometry) return;
+      const point = viewportToWorld(event.clientX, event.clientY);
+      const chordX = geometry.endX - geometry.startX;
+      const chordY = geometry.endY - geometry.startY;
+      const length = Math.max(1, Math.hypot(chordX, chordY));
+      const normalX = -chordY / length;
+      const normalY = chordX / length;
+      const midX = (geometry.startX + geometry.endX) / 2;
+      const midY = (geometry.startY + geometry.endY) / 2;
+      const bend = Math.max(-700, Math.min(700, ((point.x - midX) * normalX + (point.y - midY) * normalY) * 2));
+      setGraph((current) => {
+        const next = {
+          ...current,
+          edges: current.edges.map((item) => item.id === drag.id ? { ...item, bend } : item),
+        };
+        graphRef.current = next;
+        return next;
+      });
+    } else if (drag.kind === 'node' && drag.id) {
       setGraph((current) => {
         const next = {
           ...current,
@@ -519,7 +645,7 @@ export default function Home() {
 
   const handlePointerUp = () => {
     const drag = dragRef.current;
-    if (drag?.kind === 'node' && drag.moved && drag.snapshot) pushPast(drag.snapshot);
+    if ((drag?.kind === 'node' || drag?.kind === 'curve') && drag.moved && drag.snapshot) pushPast(drag.snapshot);
     dragRef.current = null;
   };
 
@@ -551,10 +677,11 @@ export default function Home() {
       setTransform({ x: 20, y: 20, zoom: 0.8 });
       return;
     }
-    const minX = Math.min(...graph.nodes.map((node) => node.x)) - NODE_WIDTH;
-    const maxX = Math.max(...graph.nodes.map((node) => node.x)) + NODE_WIDTH;
-    const minY = Math.min(...graph.nodes.map((node) => node.y)) - NODE_HEIGHT;
-    const maxY = Math.max(...graph.nodes.map((node) => node.y)) + NODE_HEIGHT;
+    const bounds = getGraphBounds(graph);
+    const minX = bounds.minX - 90;
+    const maxX = bounds.maxX + 90;
+    const minY = bounds.minY - 90;
+    const maxY = bounds.maxY + 90;
     const zoom = Math.min(1.15, Math.max(0.35, Math.min(rect.width / (maxX - minX), rect.height / (maxY - minY))));
     setTransform({
       zoom,
@@ -566,10 +693,11 @@ export default function Home() {
   const exportPng = () => {
     if (graph.nodes.length === 0) return;
     const padding = 100;
-    const minX = Math.min(...graph.nodes.map((node) => node.x - NODE_WIDTH / 2)) - padding;
-    const maxX = Math.max(...graph.nodes.map((node) => node.x + NODE_WIDTH / 2)) + padding;
-    const minY = Math.min(...graph.nodes.map((node) => node.y - NODE_HEIGHT / 2)) - padding;
-    const maxY = Math.max(...graph.nodes.map((node) => node.y + NODE_HEIGHT / 2)) + padding;
+    const bounds = getGraphBounds(graph);
+    const minX = bounds.minX - padding;
+    const maxX = bounds.maxX + padding;
+    const minY = bounds.minY - padding;
+    const maxY = bounds.maxY + padding;
     const sourceWidth = maxX - minX;
     const sourceHeight = maxY - minY;
     const scale = Math.min(2, 2800 / Math.max(sourceWidth, sourceHeight));
@@ -671,126 +799,146 @@ export default function Home() {
     }, 'image/png');
   };
 
+  const createPptx = async () => {
+    const { default: PptxGenJS } = await import('pptxgenjs');
+    const pptx = new PptxGenJS();
+    pptx.layout = 'LAYOUT_WIDE';
+    pptx.author = 'diagramMaker';
+    pptx.company = 'diagramMaker';
+    pptx.subject = '連関図';
+    pptx.title = '連関図';
+
+    const slide = pptx.addSlide();
+    const customGeometry = 'custGeom' as Parameters<typeof slide.addShape>[0];
+    slide.background = { color: 'FCFDFC' };
+    const slideWidth = 13.333;
+    const slideHeight = 7.5;
+    const margin = 0.5;
+    const { minX, maxX, minY, maxY } = getGraphBounds(graph);
+    const contentWidth = Math.max(1, maxX - minX);
+    const contentHeight = Math.max(1, maxY - minY);
+    const scale = Math.min((slideWidth - margin * 2) / contentWidth, (slideHeight - margin * 2) / contentHeight);
+    const offsetX = (slideWidth - contentWidth * scale) / 2 - minX * scale;
+    const offsetY = (slideHeight - contentHeight * scale) / 2 - minY * scale;
+    const toSlide = (point: { x: number; y: number }) => ({ x: point.x * scale + offsetX, y: point.y * scale + offsetY });
+
+    const dashTypeFor = (edge: DiagramEdge): 'solid' | 'dash' | 'sysDot' => edge.lineStyle === 'dashed'
+      ? 'dash'
+      : edge.lineStyle === 'dotted' ? 'sysDot' : 'solid';
+
+    const addStraightLine = (
+      geometry: EdgeGeometry,
+      edge: DiagramEdge,
+      color: string,
+      width: number,
+      includeArrows: boolean,
+    ) => {
+      const startPoint = toSlide({ x: geometry.startX, y: geometry.startY });
+      const endPoint = toSlide({ x: geometry.endX, y: geometry.endY });
+      const dx = endPoint.x - startPoint.x;
+      const dy = endPoint.y - startPoint.y;
+      const p1IsHead = dx > 0 || (Math.abs(dx) < 0.0001 && dy >= 0);
+      const startArrow = includeArrows && hasStartArrow(edge.direction);
+      const endArrow = includeArrows && hasEndArrow(edge.direction);
+      slide.addShape(pptx.ShapeType.line, {
+        x: Math.min(startPoint.x, endPoint.x),
+        y: Math.min(startPoint.y, endPoint.y),
+        w: Math.max(0.001, Math.abs(dx)),
+        h: Math.max(0.001, Math.abs(dy)),
+        flipV: dx * dy < 0,
+        line: {
+          color,
+          width,
+          dashType: color === 'FCFDFC' ? 'solid' : dashTypeFor(edge),
+          beginArrowType: (p1IsHead ? startArrow : endArrow) ? 'triangle' : 'none',
+          endArrowType: (p1IsHead ? endArrow : startArrow) ? 'triangle' : 'none',
+        },
+      });
+    };
+
+    const addCurvedLine = (
+      geometry: EdgeGeometry,
+      edge: DiagramEdge,
+      color: string,
+      width: number,
+      includeArrows: boolean,
+    ) => {
+      const startPoint = toSlide({ x: geometry.startX, y: geometry.startY });
+      const controlPoint = toSlide({ x: geometry.controlX, y: geometry.controlY });
+      const endPoint = toSlide({ x: geometry.endX, y: geometry.endY });
+      const x = Math.min(startPoint.x, controlPoint.x, endPoint.x);
+      const y = Math.min(startPoint.y, controlPoint.y, endPoint.y);
+      const widthInches = Math.max(0.001, Math.max(startPoint.x, controlPoint.x, endPoint.x) - x);
+      const heightInches = Math.max(0.001, Math.max(startPoint.y, controlPoint.y, endPoint.y) - y);
+      slide.addShape(customGeometry, {
+        x,
+        y,
+        w: widthInches,
+        h: heightInches,
+        points: [
+          { x: startPoint.x - x, y: startPoint.y - y, moveTo: true },
+          {
+            x: endPoint.x - x,
+            y: endPoint.y - y,
+            curve: { type: 'quadratic', x1: controlPoint.x - x, y1: controlPoint.y - y },
+          },
+        ],
+        fill: { type: 'none' },
+        line: {
+          color,
+          width,
+          dashType: color === 'FCFDFC' ? 'solid' : dashTypeFor(edge),
+          beginArrowType: includeArrows && hasStartArrow(edge.direction) ? 'triangle' : 'none',
+          endArrowType: includeArrows && hasEndArrow(edge.direction) ? 'triangle' : 'none',
+        },
+      });
+    };
+
+    graph.edges.forEach((edge) => {
+      const geometry = getEdgeGeometry(edge, graph.nodes);
+      if (!geometry) return;
+      const addEdgeShape = edge.shape === 'curved' ? addCurvedLine : addStraightLine;
+      if (edge.lineStyle === 'double') {
+        addEdgeShape(geometry, edge, '697176', 4.5, true);
+        addEdgeShape(geometry, edge, 'FCFDFC', 1.8, false);
+      } else {
+        addEdgeShape(geometry, edge, '697176', 1.5, true);
+      }
+    });
+
+    graph.nodes.forEach((node) => {
+      const colors = toneColors[node.tone];
+      const width = (node.tone === 'theme' ? 188 : NODE_WIDTH) * scale;
+      const height = (node.tone === 'theme' ? 96 : NODE_HEIGHT) * scale;
+      const center = toSlide(node);
+      slide.addText(node.label.replaceAll('\n', ' '), {
+        x: center.x - width / 2,
+        y: center.y - height / 2,
+        w: width,
+        h: height,
+        shape: pptx.ShapeType.roundRect,
+        fill: { color: colors.fill.slice(1) },
+        line: { color: colors.stroke.slice(1), width: node.tone === 'theme' ? 1.8 : 1 },
+        color: colors.text.slice(1),
+        fontFace: 'Yu Gothic',
+        fontSize: Math.max(9, Math.min(15, 14 * scale / 0.012)),
+        bold: true,
+        align: 'center',
+        valign: 'middle',
+        margin: 0.08,
+        breakLine: false,
+        fit: 'shrink',
+      });
+    });
+
+    return pptx;
+  };
+
   const exportPptx = async () => {
     if (graph.nodes.length === 0 || exportingPptx) return;
     setExportingPptx(true);
     try {
-      const { default: PptxGenJS } = await import('pptxgenjs');
-      const pptx = new PptxGenJS();
-      pptx.layout = 'LAYOUT_WIDE';
-      pptx.author = 'diagramMaker';
-      pptx.company = 'diagramMaker';
-      pptx.subject = '連関図';
-      pptx.title = '連関図';
-
-      const slide = pptx.addSlide();
-      slide.background = { color: 'FCFDFC' };
-      const slideWidth = 13.333;
-      const slideHeight = 7.5;
-      const margin = 0.5;
-      const minX = Math.min(...graph.nodes.map((node) => node.x - (node.tone === 'theme' ? 94 : NODE_WIDTH / 2)));
-      const maxX = Math.max(...graph.nodes.map((node) => node.x + (node.tone === 'theme' ? 94 : NODE_WIDTH / 2)));
-      const minY = Math.min(...graph.nodes.map((node) => node.y - (node.tone === 'theme' ? 48 : NODE_HEIGHT / 2)));
-      const maxY = Math.max(...graph.nodes.map((node) => node.y + (node.tone === 'theme' ? 48 : NODE_HEIGHT / 2)));
-      const contentWidth = Math.max(1, maxX - minX);
-      const contentHeight = Math.max(1, maxY - minY);
-      const scale = Math.min((slideWidth - margin * 2) / contentWidth, (slideHeight - margin * 2) / contentHeight);
-      const offsetX = (slideWidth - contentWidth * scale) / 2 - minX * scale;
-      const offsetY = (slideHeight - contentHeight * scale) / 2 - minY * scale;
-      const toSlide = (point: { x: number; y: number }) => ({ x: point.x * scale + offsetX, y: point.y * scale + offsetY });
-
-      const addLine = (
-        start: { x: number; y: number },
-        end: { x: number; y: number },
-        edge: DiagramEdge,
-        arrowAtStart: boolean,
-        arrowAtEnd: boolean,
-        railOffset = 0,
-      ) => {
-        let startPoint = toSlide(start);
-        let endPoint = toSlide(end);
-        if (railOffset) {
-          const dx = endPoint.x - startPoint.x;
-          const dy = endPoint.y - startPoint.y;
-          const length = Math.max(0.001, Math.hypot(dx, dy));
-          const offsetX = -dy / length * railOffset;
-          const offsetY = dx / length * railOffset;
-          startPoint = { x: startPoint.x + offsetX, y: startPoint.y + offsetY };
-          endPoint = { x: endPoint.x + offsetX, y: endPoint.y + offsetY };
-        }
-        const dx = endPoint.x - startPoint.x;
-        const dy = endPoint.y - startPoint.y;
-        const x = Math.min(startPoint.x, endPoint.x);
-        const y = Math.min(startPoint.y, endPoint.y);
-        const p1IsHead = dx > 0 || (Math.abs(dx) < 0.0001 && dy >= 0);
-        const beginArrow = p1IsHead ? arrowAtStart : arrowAtEnd;
-        const endArrow = p1IsHead ? arrowAtEnd : arrowAtStart;
-        const dashType: 'solid' | 'dash' | 'sysDot' = edge.lineStyle === 'dashed'
-          ? 'dash'
-          : edge.lineStyle === 'dotted' ? 'sysDot' : 'solid';
-        slide.addShape(pptx.ShapeType.line, {
-          x,
-          y,
-          w: Math.max(0.001, Math.abs(dx)),
-          h: Math.max(0.001, Math.abs(dy)),
-          flipV: dx * dy < 0,
-          line: {
-            color: '697176',
-            width: edge.lineStyle === 'double' ? 1 : 1.5,
-            dashType,
-            beginArrowType: beginArrow ? 'triangle' : 'none',
-            endArrowType: endArrow ? 'triangle' : 'none',
-          },
-        });
-      };
-
-      graph.edges.forEach((edge) => {
-        const geometry = getEdgeGeometry(edge, graph.nodes);
-        if (!geometry) return;
-        const points = edge.shape === 'curved'
-          ? Array.from({ length: 7 }, (_, index) => pointOnQuadratic(geometry, index / 6))
-          : [
-              { x: geometry.startX, y: geometry.startY },
-              { x: geometry.endX, y: geometry.endY },
-            ];
-        points.slice(0, -1).forEach((point, index) => {
-          const nextPoint = points[index + 1];
-          const arrowAtStart = index === 0 && hasStartArrow(edge.direction);
-          const arrowAtEnd = index === points.length - 2 && hasEndArrow(edge.direction);
-          if (edge.lineStyle === 'double') {
-            addLine(point, nextPoint, edge, arrowAtStart, arrowAtEnd, -0.025);
-            addLine(point, nextPoint, edge, arrowAtStart, arrowAtEnd, 0.025);
-          } else {
-            addLine(point, nextPoint, edge, arrowAtStart, arrowAtEnd);
-          }
-        });
-      });
-
-      graph.nodes.forEach((node) => {
-        const colors = toneColors[node.tone];
-        const width = (node.tone === 'theme' ? 188 : NODE_WIDTH) * scale;
-        const height = (node.tone === 'theme' ? 96 : NODE_HEIGHT) * scale;
-        const center = toSlide(node);
-        slide.addText(node.label.replaceAll('\n', ' '), {
-          x: center.x - width / 2,
-          y: center.y - height / 2,
-          w: width,
-          h: height,
-          shape: pptx.ShapeType.roundRect,
-          fill: { color: colors.fill.slice(1) },
-          line: { color: colors.stroke.slice(1), width: node.tone === 'theme' ? 1.8 : 1 },
-          color: colors.text.slice(1),
-          fontFace: 'Yu Gothic',
-          fontSize: Math.max(9, Math.min(15, 14 * scale / 0.012)),
-          bold: true,
-          align: 'center',
-          valign: 'middle',
-          margin: 0.08,
-          breakLine: false,
-          fit: 'shrink',
-        });
-      });
-
+      const pptx = await createPptx();
       await pptx.writeFile({ fileName: `連関図-${new Date().toISOString().slice(0, 10)}.pptx`, compression: true });
     } catch (error) {
       console.error(error);
@@ -798,6 +946,105 @@ export default function Home() {
     } finally {
       setExportingPptx(false);
     }
+  };
+
+  const requestGoogleAccessToken = async (clientId: string) => {
+    const googleIdentity = await loadGoogleIdentity();
+    return new Promise<string>((resolve, reject) => {
+      const tokenClient = googleIdentity.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: GOOGLE_DRIVE_SCOPE,
+        callback: (response) => {
+          if (response.access_token) resolve(response.access_token);
+          else reject(new Error(response.error_description || response.error || 'Googleの認証を完了できませんでした。'));
+        },
+        error_callback: (error) => reject(new Error(error.type === 'popup_closed'
+          ? 'Googleの認証画面が閉じられました。'
+          : 'Googleの認証画面を開けませんでした。')),
+      });
+      tokenClient.requestAccessToken({ prompt: '' });
+    });
+  };
+
+  const createGoogleSlides = async (clientId: string) => {
+    if (creatingGoogleSlides || graph.nodes.length === 0) return;
+    const destination = window.open('', '_blank');
+    if (destination) {
+      destination.document.title = 'Googleスライドを作成中';
+      destination.document.body.textContent = 'Googleスライドを作成しています…';
+      destination.document.body.style.cssText = 'font:16px system-ui;padding:40px;color:#29483f;background:#fcfdfc';
+    }
+    setCreatingGoogleSlides(true);
+    setGoogleSlidesUrl(null);
+    setGoogleError(null);
+    try {
+      const accessToken = await requestGoogleAccessToken(clientId);
+      const pptx = await createPptx();
+      const output = await pptx.write({ outputType: 'blob', compression: true });
+      if (!(output instanceof Blob)) throw new Error('Googleスライド用データを作成できませんでした。');
+      const boundary = `diagram-maker-${crypto.randomUUID()}`;
+      const metadata = JSON.stringify({
+        name: `連関図-${new Date().toISOString().slice(0, 10)}`,
+        mimeType: 'application/vnd.google-apps.presentation',
+      });
+      const uploadBody = new Blob([
+        `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n`,
+        `--${boundary}\r\nContent-Type: application/vnd.openxmlformats-officedocument.presentationml.presentation\r\n\r\n`,
+        output,
+        `\r\n--${boundary}--`,
+      ], { type: `multipart/related; boundary=${boundary}` });
+      const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`,
+        },
+        body: uploadBody,
+      });
+      if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(`Google Driveへの作成に失敗しました（${response.status}）${detail ? `: ${detail.slice(0, 180)}` : ''}`);
+      }
+      const file = await response.json() as { id?: string; webViewLink?: string };
+      if (!file.id) throw new Error('作成したGoogleスライドのIDを取得できませんでした。');
+      const url = file.webViewLink || `https://docs.google.com/presentation/d/${file.id}/edit`;
+      setGoogleSlidesUrl(url);
+      setGoogleSetupOpen(false);
+      if (destination && !destination.closed) destination.location.replace(url);
+      else window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      if (destination && !destination.closed) destination.close();
+      console.error(error);
+      setGoogleError(error instanceof Error ? error.message : 'Googleスライドを作成できませんでした。');
+    } finally {
+      setCreatingGoogleSlides(false);
+    }
+  };
+
+  const openGoogleSetup = () => {
+    setGoogleClientIdInput(localStorage.getItem(GOOGLE_CLIENT_ID_KEY) ?? '');
+    setGoogleError(null);
+    setGoogleSetupOpen(true);
+  };
+
+  const startGoogleSlidesExport = () => {
+    const clientId = localStorage.getItem(GOOGLE_CLIENT_ID_KEY);
+    if (!clientId) {
+      openGoogleSetup();
+      return;
+    }
+    void createGoogleSlides(clientId);
+  };
+
+  const saveGoogleSetup = () => {
+    const clientId = googleClientIdInput.trim();
+    if (!clientId.endsWith('.apps.googleusercontent.com')) {
+      setGoogleError('「.apps.googleusercontent.com」で終わるOAuthクライアントIDを入力してください。');
+      return;
+    }
+    localStorage.setItem(GOOGLE_CLIENT_ID_KEY, clientId);
+    setGoogleSetupOpen(false);
+    void createGoogleSlides(clientId);
   };
 
   const resetGraph = () => {
@@ -816,7 +1063,7 @@ export default function Home() {
     }));
   };
 
-  const updateSelectedEdge = (patch: Partial<Pick<DiagramEdge, 'direction' | 'shape' | 'lineStyle'>>) => {
+  const updateSelectedEdge = (patch: Partial<Pick<DiagramEdge, 'direction' | 'shape' | 'lineStyle' | 'bend'>>) => {
     if (!selectedEdgeId) return;
     commit((current) => ({
       ...current,
@@ -826,6 +1073,8 @@ export default function Home() {
 
   const fromNode = selectedEdge ? graph.nodes.find((node) => node.id === selectedEdge.from) : null;
   const toNode = selectedEdge ? graph.nodes.find((node) => node.id === selectedEdge.to) : null;
+  const selectedEdgeGeometry = selectedEdge?.shape === 'curved' ? getEdgeGeometry(selectedEdge, graph.nodes) : null;
+  const curveHandlePoint = selectedEdgeGeometry ? pointOnQuadratic(selectedEdgeGeometry, 0.5) : null;
 
   return (
     <main className="app-shell">
@@ -875,11 +1124,17 @@ export default function Home() {
               <p className="field-label">形状</p>
               <div className="edge-option-grid two-columns">
                 {(Object.keys(shapeNames) as EdgeShape[]).map((shape) => (
-                  <button key={shape} className={selectedEdge.shape === shape ? 'selected' : ''} type="button" onClick={() => updateSelectedEdge({ shape })}>
+                  <button key={shape} className={selectedEdge.shape === shape ? 'selected' : ''} type="button" onClick={() => updateSelectedEdge({ shape, ...(shape === 'curved' && Math.abs(selectedEdge.bend) < 1 ? { bend: 58 } : {}) })}>
                     <span className={`shape-preview ${shape}`} />{shapeNames[shape]}
                   </button>
                 ))}
               </div>
+              {selectedEdge.shape === 'curved' && (
+                <div className="curve-help">
+                  <span>図上の丸いハンドルをドラッグして調整</span>
+                  <button type="button" onClick={() => updateSelectedEdge({ bend: 58 })}>標準に戻す</button>
+                </div>
+              )}
               <p className="field-label">矢印</p>
               <div className="edge-option-grid direction-grid">
                 {(Object.keys(directionNames) as EdgeDirection[]).map((direction) => (
@@ -920,6 +1175,7 @@ export default function Home() {
             <p>{tool === 'connect' ? (connectFrom ? '次に、矢印の行き先を選びます。' : '矢印の出発点になる要素を選びます。') : '要素右端の＋を別の要素へドラッグすると、関係を直接追加できます。'}</p>
           </div>
           <button className="reset-button" type="button" onClick={resetGraph}>最初の例に戻す</button>
+          <button className="reset-button google-settings-button" type="button" onClick={openGoogleSetup}>Google連携を設定</button>
         </aside>
 
         <div className="canvas-wrap">
@@ -938,6 +1194,8 @@ export default function Home() {
             <button type="button" onClick={fitView}>全体表示</button>
             <button className="export-button" type="button" onClick={exportPng} disabled={graph.nodes.length === 0}>PNG</button>
             <button className="export-button pptx-button" type="button" title="Keynoteでも開いて編集できます" onClick={exportPptx} disabled={graph.nodes.length === 0 || exportingPptx}>{exportingPptx ? '作成中…' : 'PowerPoint'}</button>
+            <button className="export-button google-slides-button" type="button" onClick={startGoogleSlidesExport} disabled={graph.nodes.length === 0 || creatingGoogleSlides}>{creatingGoogleSlides ? '作成中…' : 'Googleスライド'}</button>
+            <button type="button" onClick={openGoogleSetup} aria-label="Google連携を設定" title="Google連携を設定">⚙︎</button>
           </div>
 
           <div
@@ -982,6 +1240,36 @@ export default function Home() {
                     </g>
                   );
                 })}
+                {selectedEdge && selectedEdgeGeometry && curveHandlePoint && (
+                  <g className="curve-control">
+                    <line
+                      x1={(selectedEdgeGeometry.startX + selectedEdgeGeometry.endX) / 2}
+                      y1={(selectedEdgeGeometry.startY + selectedEdgeGeometry.endY) / 2}
+                      x2={curveHandlePoint.x}
+                      y2={curveHandlePoint.y}
+                    />
+                    <circle
+                      cx={curveHandlePoint.x}
+                      cy={curveHandlePoint.y}
+                      r="9"
+                      role="slider"
+                      tabIndex={0}
+                      aria-label="曲線の曲がり具合"
+                      aria-valuemin={-700}
+                      aria-valuemax={700}
+                      aria-valuenow={Math.round(selectedEdge.bend)}
+                      onPointerDown={(event) => handleCurvePointerDown(event, selectedEdge)}
+                      onPointerMove={handlePointerMove}
+                      onPointerUp={(event) => { event.stopPropagation(); handlePointerUp(); }}
+                      onPointerCancel={handlePointerUp}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+                        event.preventDefault();
+                        updateSelectedEdge({ bend: Math.max(-700, Math.min(700, selectedEdge.bend + (event.key === 'ArrowUp' ? -12 : 12))) });
+                      }}
+                    />
+                  </g>
+                )}
                 {relationDrag && (
                   <path className="edge-preview" d={`M ${graph.nodes.find((node) => node.id === relationDrag.from)?.x ?? relationDrag.x} ${graph.nodes.find((node) => node.id === relationDrag.from)?.y ?? relationDrag.y} L ${relationDrag.x} ${relationDrag.y}`} markerEnd="url(#arrow)" />
                 )}
@@ -1030,6 +1318,15 @@ export default function Home() {
               <div className="mode-banner"><span />{connectFrom ? '行き先の要素を選択' : '出発点の要素を選択'}<button type="button" onClick={() => { setTool('select'); setConnectFrom(null); }}>終了</button></div>
             )}
 
+            {(googleSlidesUrl || googleError) && (
+              <div className={`google-result ${googleError ? 'error' : ''}`} role="status">
+                <span>{googleError || 'Googleスライドを作成しました'}</span>
+                {googleSlidesUrl && <a href={googleSlidesUrl} target="_blank" rel="noreferrer">開く</a>}
+                {googleError && <button type="button" onClick={openGoogleSetup}>設定</button>}
+                <button type="button" aria-label="閉じる" onClick={() => { setGoogleSlidesUrl(null); setGoogleError(null); }}>×</button>
+              </div>
+            )}
+
             <div className="zoom-control" aria-label="表示倍率">
               <button type="button" onClick={() => setZoom(transform.zoom - 0.1)} aria-label="縮小">−</button>
               <span>{Math.round(transform.zoom * 100)}%</span>
@@ -1038,6 +1335,43 @@ export default function Home() {
           </div>
         </div>
       </section>
+
+      {googleSetupOpen && (
+        <div className="modal-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setGoogleSetupOpen(false); }}>
+          <section className="google-setup" role="dialog" aria-modal="true" aria-labelledby="google-setup-title">
+            <div className="google-setup-heading">
+              <div>
+                <p className="eyebrow">GOOGLE DRIVE</p>
+                <h2 id="google-setup-title">Googleスライド連携</h2>
+              </div>
+              <button type="button" aria-label="閉じる" onClick={() => setGoogleSetupOpen(false)}>×</button>
+            </div>
+            <p>初回だけ、ご自身のGoogle Cloudで作成した「ウェブアプリケーション」のOAuthクライアントIDを設定します。クライアントシークレットは不要です。</p>
+            <ol>
+              <li><a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noreferrer">Google Drive API</a>を有効にする</li>
+              <li><a href="https://console.cloud.google.com/auth/branding" target="_blank" rel="noreferrer">OAuth同意画面</a>を設定し、ご自身をテストユーザーにする</li>
+              <li><a href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noreferrer">OAuthクライアント</a>をウェブアプリとして作成する</li>
+              <li>承認済みJavaScript生成元へ <code>https://psychologykm.github.io</code> を追加する</li>
+            </ol>
+            <label htmlFor="google-client-id">OAuthクライアントID</label>
+            <input
+              id="google-client-id"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="123456789-xxxx.apps.googleusercontent.com"
+              value={googleClientIdInput}
+              onChange={(event) => setGoogleClientIdInput(event.target.value)}
+            />
+            <p className="google-privacy">IDはこのブラウザ内だけに保存します。Drive全体ではなく、このアプリが作成したファイルだけを扱う権限を要求します。</p>
+            {googleError && <p className="google-setup-error" role="alert">{googleError}</p>}
+            <div className="google-setup-actions">
+              <button type="button" onClick={() => setGoogleSetupOpen(false)}>キャンセル</button>
+              <button className="save-google-button" type="button" onClick={saveGoogleSetup} disabled={creatingGoogleSlides}>{creatingGoogleSlides ? '作成中…' : '保存して作成'}</button>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }
