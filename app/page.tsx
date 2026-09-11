@@ -819,6 +819,7 @@ export default function Home() {
   };
 
   const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if ((event.target as Element).closest('.zoom-control, .mode-banner, .google-result, .empty-state')) return;
     if (tool === 'marquee' || tool === 'lasso') {
       event.preventDefault();
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -1644,7 +1645,7 @@ export default function Home() {
             className={`diagram-canvas ${tool === 'connect' ? 'connecting' : ''} ${tool === 'marquee' || tool === 'lasso' ? 'selecting' : ''}`}
             ref={canvasRef}
             onDoubleClick={(event) => {
-              if (tool === 'select' && !(event.target as Element).closest('.diagram-node, .edge-hit')) addNode(viewportToWorld(event.clientX, event.clientY));
+              if (tool === 'select' && !(event.target as Element).closest('.diagram-node, .edge-hit, .zoom-control, .mode-banner, .google-result, .empty-state')) addNode(viewportToWorld(event.clientX, event.clientY));
             }}
             onPointerDown={handleCanvasPointerDown}
             onPointerMove={handlePointerMove}
@@ -1838,7 +1839,7 @@ export default function Home() {
             )}
 
             {tool === 'connect' && (
-              <div className="mode-banner"><span />{connectFrom ? '行き先の要素を選択' : '出発点の要素を選択'}<button type="button" onClick={() => { setTool('select'); setConnectFrom(null); }}>終了</button></div>
+              <div className="mode-banner" onPointerDown={(event) => event.stopPropagation()}><span />{connectFrom ? '行き先の要素を選択' : '出発点の要素を選択'}<button type="button" onClick={() => { setTool('select'); setConnectFrom(null); }}>終了</button></div>
             )}
             {(tool === 'marquee' || tool === 'lasso') && (
               <div className="mode-banner" onPointerDown={(event) => event.stopPropagation()}><span />{tool === 'marquee' ? '長方形で複数選択' : 'フリーハンドで複数選択'}<button type="button" onClick={() => { setTool('select'); updateSelectionDraft(null); }}>終了</button></div>
@@ -1853,7 +1854,7 @@ export default function Home() {
               </div>
             )}
 
-            <div className="zoom-control" aria-label="表示倍率">
+            <div className="zoom-control" aria-label="表示倍率" onPointerDown={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
               <button type="button" onClick={() => setZoom(transform.zoom - 0.1)} aria-label="縮小">−</button>
               <span>{Math.round(transform.zoom * 100)}%</span>
               <button type="button" onClick={() => setZoom(transform.zoom + 0.1)} aria-label="拡大">＋</button>
