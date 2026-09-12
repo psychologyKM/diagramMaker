@@ -116,12 +116,23 @@ h1 { margin: 0; font-size: 27px; line-height: 1; letter-spacing: -.045em; }
 .style-control-row label { display: flex; align-items: center; gap: 6px; color: #77827f; font-size: 9px; font-weight: 700; }
 .style-control-row input[type='color'] { width: 30px; height: 25px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: white; cursor: pointer; }
 .style-control-row button { border: 0; background: transparent; color: var(--green); cursor: pointer; font-size: 8px; text-decoration: underline; text-underline-offset: 2px; }
+.group-style-reset span { color: #7c8885; font-size: 8px; line-height: 1.4; }
 .font-size-control .field-label { display: flex; justify-content: space-between; }
 .font-size-control .field-label strong { color: var(--green); }
 .font-size-control input[type='range'] { width: 100%; accent-color: var(--green); cursor: pointer; }
 .duplicate-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .duplicate-actions button { min-height: 34px; border: 1px solid var(--line); border-radius: 8px; background: white; color: #5f6d69; cursor: pointer; font-size: 9px; font-weight: 700; }
 .duplicate-actions button:hover { border-color: var(--green); background: #eef5f1; color: var(--green); }
+.alignment-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.alignment-grid button, .distribution-actions button, .connector-alignment button, .endpoint-alignment-row button { min-width: 0; min-height: 31px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: white; color: #5f6d69; cursor: pointer; font-size: 8px; }
+.alignment-grid button:hover, .distribution-actions button:hover:not(:disabled), .connector-alignment button:hover, .endpoint-alignment-row button:hover { border-color: var(--green); background: #eef5f1; color: var(--green); }
+.distribution-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 5px; }
+.distribution-actions button:disabled { opacity: .38; cursor: default; }
+.alignment-note { margin: -2px 0 7px; color: #87918e; font-size: 8px; line-height: 1.5; }
+.connector-alignment { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.endpoint-alignment-row { display: grid; grid-template-columns: 38px repeat(4, 1fr); align-items: center; gap: 4px; margin-top: 5px; }
+.endpoint-alignment-row > span { color: #77827f; font-size: 8px; font-weight: 700; }
+.endpoint-alignment-row button { min-height: 28px; font: 700 13px/1 Arial, sans-serif; }
 
 .tip-card { margin-top: 25px; padding: 13px; border-radius: 12px; background: #eef5f1; color: #53615d; font-size: 10px; line-height: 1.65; }
 .tip-card p { margin: 7px 0 0; }

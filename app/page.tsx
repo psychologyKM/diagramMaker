@@ -66,6 +66,7 @@ const NODE_HEIGHT = 86;
 const WORLD_WIDTH = 2200;
 const WORLD_HEIGHT = 1500;
 const NODE_PALETTE = ['#276a57', '#e3eee9', '#fff2d7', '#e2ecf7', '#f6dada', '#eee3f4', '#f2eee2', '#ffffff'];
+const TEXT_PALETTE = ['#15201f', '#ffffff', '#276a57', '#37526b', '#9e514d', '#6b4b88', '#8a641c', '#2458b7'];
 
 const initialGraph: Graph = {
   nodes: [
@@ -660,6 +661,57 @@ export default function Home() {
     }
     setSelectedEdgeId(null);
     setTool('select');
+  };
+
+  const alignSelectedNodes = (
+    alignment: 'left' | 'center-x' | 'right' | 'top' | 'center-y' | 'bottom' | 'distribute-x' | 'distribute-y',
+  ) => {
+    const minimum = alignment === 'distribute-x' || alignment === 'distribute-y' ? 3 : 2;
+    if (multiSelectedIds.length < minimum) return;
+    const selectedIds = new Set(multiSelectedIds);
+    commit((current) => {
+      const selectedNodes = current.nodes.filter((node) => selectedIds.has(node.id));
+      const left = Math.min(...selectedNodes.map((node) => node.x - getNodeSize(node).width / 2));
+      const right = Math.max(...selectedNodes.map((node) => node.x + getNodeSize(node).width / 2));
+      const top = Math.min(...selectedNodes.map((node) => node.y - getNodeSize(node).height / 2));
+      const bottom = Math.max(...selectedNodes.map((node) => node.y + getNodeSize(node).height / 2));
+      const orderedX = [...selectedNodes].sort((a, b) => a.x - b.x);
+      const orderedY = [...selectedNodes].sort((a, b) => a.y - b.y);
+      const totalWidth = orderedX.reduce((sum, node) => sum + getNodeSize(node).width, 0);
+      const totalHeight = orderedY.reduce((sum, node) => sum + getNodeSize(node).height, 0);
+      const horizontalGap = (right - left - totalWidth) / (orderedX.length - 1);
+      const verticalGap = (bottom - top - totalHeight) / (orderedY.length - 1);
+      let nextLeft = left;
+      const distributedX = new Map(orderedX.map((node) => {
+        const width = getNodeSize(node).width;
+        const position: [string, number] = [node.id, nextLeft + width / 2];
+        nextLeft += width + horizontalGap;
+        return position;
+      }));
+      let nextTop = top;
+      const distributedY = new Map(orderedY.map((node) => {
+        const height = getNodeSize(node).height;
+        const position: [string, number] = [node.id, nextTop + height / 2];
+        nextTop += height + verticalGap;
+        return position;
+      }));
+
+      return {
+        ...current,
+        nodes: current.nodes.map((node) => {
+          if (!selectedIds.has(node.id)) return node;
+          const size = getNodeSize(node);
+          if (alignment === 'left') return { ...node, x: left + size.width / 2 };
+          if (alignment === 'center-x') return { ...node, x: (left + right) / 2 };
+          if (alignment === 'right') return { ...node, x: right - size.width / 2 };
+          if (alignment === 'top') return { ...node, y: top + size.height / 2 };
+          if (alignment === 'center-y') return { ...node, y: (top + bottom) / 2 };
+          if (alignment === 'bottom') return { ...node, y: bottom - size.height / 2 };
+          if (alignment === 'distribute-x') return { ...node, x: distributedX.get(node.id) ?? node.x };
+          return { ...node, y: distributedY.get(node.id) ?? node.y };
+        }),
+      };
+    });
   };
 
   const startConnecting = () => {
@@ -1437,6 +1489,34 @@ export default function Home() {
     }));
   };
 
+  const alignSelectedEdgeAnchors = (axis: 'auto' | 'horizontal' | 'vertical') => {
+    if (!selectedEdge) return;
+    if (axis === 'auto') {
+      updateSelectedEdge({ fromAnchor: null, toAnchor: null });
+      return;
+    }
+    const source = graph.nodes.find((node) => node.id === selectedEdge.from);
+    const target = graph.nodes.find((node) => node.id === selectedEdge.to);
+    if (!source || !target) return;
+    if (axis === 'horizontal') {
+      const direction = target.x >= source.x ? 1 : -1;
+      updateSelectedEdge({ fromAnchor: { x: direction, y: 0 }, toAnchor: { x: -direction, y: 0 } });
+      return;
+    }
+    const direction = target.y >= source.y ? 1 : -1;
+    updateSelectedEdge({ fromAnchor: { x: 0, y: direction }, toAnchor: { x: 0, y: -direction } });
+  };
+
+  const setSelectedEdgeAnchorSide = (endpoint: 'from' | 'to', side: 'top' | 'right' | 'bottom' | 'left') => {
+    const anchor = {
+      top: { x: 0, y: -1 },
+      right: { x: 1, y: 0 },
+      bottom: { x: 0, y: 1 },
+      left: { x: -1, y: 0 },
+    }[side];
+    updateSelectedEdge(endpoint === 'from' ? { fromAnchor: anchor } : { toAnchor: anchor });
+  };
+
   const fromNode = selectedEdge ? graph.nodes.find((node) => node.id === selectedEdge.from) : null;
   const toNode = selectedEdge ? graph.nodes.find((node) => node.id === selectedEdge.to) : null;
   const selectedEdgeGeometry = selectedEdge ? getEdgeGeometry(selectedEdge, graph.nodes) : null;
@@ -1473,9 +1553,36 @@ export default function Home() {
                   <span>＋</span>
                 </label>
               </div>
+              <p className="field-label">文字色を一括変更</p>
+              <div className="color-palette">
+                {TEXT_PALETTE.map((color) => (
+                  <button key={color} type="button" title={color} style={{ backgroundColor: color }} onClick={() => updateMultiSelectedNodes({ textColor: color })} />
+                ))}
+                <label className="custom-color" title="自由な文字色を選択">
+                  <input type="color" defaultValue="#15201f" onChange={(event) => updateMultiSelectedNodes({ textColor: event.target.value })} />
+                  <span>＋</span>
+                </label>
+              </div>
+              <div className="style-control-row group-style-reset">
+                <span>背景とのコントラストに合わせる</span>
+                <button type="button" onClick={() => updateMultiSelectedNodes({ textColor: null })}>文字色を自動</button>
+              </div>
               <div className="font-size-control">
                 <label className="field-label" htmlFor="multi-font-size">文字サイズ</label>
                 <input id="multi-font-size" type="range" min="9" max="28" defaultValue="13" onChange={(event) => updateMultiSelectedNodes({ fontSize: Number(event.target.value) })} />
+              </div>
+              <p className="field-label">ボックスを整列</p>
+              <div className="alignment-grid">
+                <button type="button" onClick={() => alignSelectedNodes('left')}>左揃え</button>
+                <button type="button" onClick={() => alignSelectedNodes('center-x')}>左右中央</button>
+                <button type="button" onClick={() => alignSelectedNodes('right')}>右揃え</button>
+                <button type="button" onClick={() => alignSelectedNodes('top')}>上揃え</button>
+                <button type="button" onClick={() => alignSelectedNodes('center-y')}>上下中央</button>
+                <button type="button" onClick={() => alignSelectedNodes('bottom')}>下揃え</button>
+              </div>
+              <div className="distribution-actions">
+                <button type="button" disabled={multiSelectedNodes.length < 3} onClick={() => alignSelectedNodes('distribute-x')}>左右に等間隔</button>
+                <button type="button" disabled={multiSelectedNodes.length < 3} onClick={() => alignSelectedNodes('distribute-y')}>上下に等間隔</button>
               </div>
               <p className="field-label">複製</p>
               <div className="duplicate-actions">
@@ -1552,6 +1659,27 @@ export default function Home() {
               <div className="anchor-help">
                 <span>図上の両端の丸をドラッグして接点を移動</span>
                 <button type="button" onClick={() => updateSelectedEdge({ fromAnchor: null, toAnchor: null })}>自動に戻す</button>
+              </div>
+              <p className="field-label">矢印の接点を整列</p>
+              <p className="alignment-note">接続を保ったまま、始点と終点をボックスの辺の中央へ揃えます。</p>
+              <div className="connector-alignment">
+                <button type="button" onClick={() => alignSelectedEdgeAnchors('auto')}>自動</button>
+                <button type="button" onClick={() => alignSelectedEdgeAnchors('horizontal')}>↔ 左右辺</button>
+                <button type="button" onClick={() => alignSelectedEdgeAnchors('vertical')}>↕ 上下辺</button>
+              </div>
+              <div className="endpoint-alignment-row">
+                <span>始点</span>
+                <button type="button" title="上辺" onClick={() => setSelectedEdgeAnchorSide('from', 'top')}>↑</button>
+                <button type="button" title="右辺" onClick={() => setSelectedEdgeAnchorSide('from', 'right')}>→</button>
+                <button type="button" title="下辺" onClick={() => setSelectedEdgeAnchorSide('from', 'bottom')}>↓</button>
+                <button type="button" title="左辺" onClick={() => setSelectedEdgeAnchorSide('from', 'left')}>←</button>
+              </div>
+              <div className="endpoint-alignment-row">
+                <span>終点</span>
+                <button type="button" title="上辺" onClick={() => setSelectedEdgeAnchorSide('to', 'top')}>↑</button>
+                <button type="button" title="右辺" onClick={() => setSelectedEdgeAnchorSide('to', 'right')}>→</button>
+                <button type="button" title="下辺" onClick={() => setSelectedEdgeAnchorSide('to', 'bottom')}>↓</button>
+                <button type="button" title="左辺" onClick={() => setSelectedEdgeAnchorSide('to', 'left')}>←</button>
               </div>
               <p className="field-label">形状</p>
               <div className="edge-option-grid two-columns">
